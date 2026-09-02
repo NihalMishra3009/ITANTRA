@@ -11,6 +11,7 @@ import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Looper
 import android.util.Log
+import com.itantra.protocol.BinaryPacketCodec
 import com.itantra.protocol.TextPacket
 import kotlinx.coroutines.*
 import java.io.DataInputStream
@@ -51,6 +52,7 @@ class WifiDirectTransport(
     private var serverJob: Job? = null
     private var receiverJob: Job? = null
     private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
+    private val codec = BinaryPacketCodec()
 
     @SuppressLint("MissingPermission")
     override fun startListening(
@@ -134,16 +136,25 @@ class WifiDirectTransport(
         manager.connect(ch, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 Log.i(TAG, "Connecting to Wi-Fi Direct peer ${device.address}...")
-                // Connect TCP client to group owner
+                // Wait for group negotiation, then discover the group owner IP.
+                // NOTE: device.address is the P2P MAC — NOT a TCP IP. We must read
+                // the real group IPv4 from WifiP2pInfo.groupOwnerAddress.
                 coroutineScope.launch {
-                    delay(2000) // Wait for group negotiation
+                    delay(2500) // Wait for group formation
                     try {
+                        val ip = resolveGroupOwnerIp(manager, ch)
+                        if (ip == null) {
+                            Log.e(TAG, "Could not resolve group owner IP for Wi-Fi Direct")
+                            updateState(ConnectionState.ERROR)
+                            withContext(Dispatchers.Main) { onResult(false) }
+                            return@launch
+                        }
                         val socket = Socket()
-                        socket.connect(InetSocketAddress(device.address, SERVER_PORT), 5000)
+                        socket.connect(InetSocketAddress(ip, SERVER_PORT), 8000)
                         handleConnectedSocket(socket)
                         withContext(Dispatchers.Main) { onResult(true) }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed TCP handshake with peer", e)
+                        Log.e(TAG, "Failed TCP handshake with Wi-Fi Direct peer", e)
                         updateState(ConnectionState.ERROR)
                         withContext(Dispatchers.Main) { onResult(false) }
                     }
@@ -158,6 +169,34 @@ class WifiDirectTransport(
         })
     }
 
+    /**
+     * Resolve the Wi-Fi Direct group owner's IPv4 address from WifiP2pInfo.
+     * The group owner is the device that opened the TCP server.
+     */
+    @SuppressLint("MissingPermission")
+    private suspend fun resolveGroupOwnerIp(
+        manager: WifiP2pManager,
+        ch: WifiP2pManager.Channel
+    ): String? = withContext(Dispatchers.Main) {
+        var result: String? = null
+        try {
+            manager.requestConnectionInfo(ch) { info ->
+                val goAddr = info.groupOwnerAddress?.hostAddress
+                if (goAddr != null) {
+                    result = when {
+                        info.groupFormed && goAddr != "0.0.0.0" -> goAddr
+                        else -> "192.168.49.1" // standard P2P GO subnet
+                    }
+                }
+            }
+            // give the async callback a moment; otherwise fall back to standard GO IP
+            delay(800)
+        } catch (e: Exception) {
+            Log.w(TAG, "requestConnectionInfo failed", e)
+        }
+        result ?: "192.168.49.1"
+    }
+
     private fun handleConnectedSocket(socket: Socket) {
         clientSocket = socket
         dataInputStream = DataInputStream(socket.getInputStream())
@@ -170,11 +209,10 @@ class WifiDirectTransport(
             while (isActive && isConnected()) {
                 try {
                     val length = dis.readInt()
-                    if (length in 1..100000) {
+                    if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
-                        val json = String(buffer, Charsets.UTF_8)
-                        val packet = TextPacket.fromJson(json)
+                        val packet = codec.decode(buffer)
 
                         if (packet != null && seenMessageIds.add(packet.messageId)) {
                             Log.i(TAG, "Received Wi-Fi Direct packet: ${packet.messageId}")
@@ -200,8 +238,7 @@ class WifiDirectTransport(
 
         return try {
             val dos = dataOutputStream ?: return false
-            val json = packet.toJson()
-            val bytes = json.toByteArray(Charsets.UTF_8)
+            val bytes = codec.encode(packet)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()

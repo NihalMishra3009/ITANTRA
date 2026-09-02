@@ -1,9 +1,6 @@
 package com.itantra.ai4bharat
 
-import android.content.Context
 import android.util.Log
-import java.io.File
-import java.io.FileOutputStream
 
 enum class ModelType {
     VAD,
@@ -22,47 +19,16 @@ data class ModelMetadata(
 )
 
 /**
- * Standardized AI4Bharat Model Lifecycle & Resource Manager.
- * Enforces lazy loading, memory safety, and model file integrity.
+ * Model lifecycle & resource tracker for the on-device ML engines.
+ * Enforces lazy loading, memory safety, and accurate load state.
  */
-class Ai4BharatModelManager(private val context: Context) {
+class Ai4BharatModelManager {
 
     companion object {
         private const val TAG = "Ai4BharatModelManager"
     }
 
     private val loadedModels = mutableMapOf<String, ModelMetadata>()
-
-    fun getModelFile(type: ModelType, languageCode: String): File? {
-        val fileName = when (type) {
-            ModelType.VAD -> "silero_vad.onnx"
-            ModelType.STT -> "indicconformer_${languageCode.lowercase()}_int8.tflite"
-            ModelType.TTS -> "indictts_${languageCode.lowercase()}_int8.tflite"
-        }
-        val subDir = when (type) {
-            ModelType.VAD -> "vad"
-            ModelType.STT -> "stt"
-            ModelType.TTS -> "tts"
-        }
-        val assetPath = "models/$subDir/$fileName"
-
-        val localFile = File(context.filesDir, fileName)
-        if (localFile.exists() && localFile.length() > 0) {
-            return localFile
-        }
-
-        return try {
-            context.assets.open(assetPath).use { input ->
-                FileOutputStream(localFile).use { output ->
-                    input.copyTo(output)
-                }
-            }
-            localFile
-        } catch (e: Exception) {
-            Log.w(TAG, "Asset not found: $assetPath (${e.message})")
-            null
-        }
-    }
 
     fun isLoaded(type: ModelType, languageCode: String): Boolean {
         val key = "${type.name}_${languageCode.lowercase()}"
@@ -71,13 +37,16 @@ class Ai4BharatModelManager(private val context: Context) {
 
     fun markLoaded(type: ModelType, languageCode: String, sizeBytes: Long = 0L) {
         val key = "${type.name}_${languageCode.lowercase()}"
-        val name = when (type) {
-            ModelType.VAD -> "Silero VAD v5 ONNX"
-            ModelType.STT -> "AI4Bharat IndicConformer ($languageCode)"
-            ModelType.TTS -> "AI4Bharat Indic-TTS ($languageCode)"
+        val (name, framework) = when (type) {
+            ModelType.VAD -> "Silero VAD v5" to "sherpa-onnx (ONNX Runtime)"
+            ModelType.STT -> "OpenAI Whisper tiny int8 (multilingual)" to "sherpa-onnx (ONNX Runtime)"
+            ModelType.TTS -> "VITS TTS" to "sherpa-onnx (ONNX Runtime)"
         }
-        val framework = if (type == ModelType.VAD) "ONNX Runtime Mobile" else "TFLite Int8 / Acoustic"
-        val license = if (type == ModelType.VAD) "MIT" else "MIT / CC-BY 4.0 (AI4Bharat / IIT Madras)"
+        val license = when (type) {
+            ModelType.VAD -> "MIT"
+            ModelType.STT -> "MIT (Whisper)"
+            ModelType.TTS -> "MIT (VITS)"
+        }
 
         loadedModels[key] = ModelMetadata(
             name = name,
@@ -88,7 +57,7 @@ class Ai4BharatModelManager(private val context: Context) {
             isLoaded = true,
             license = license
         )
-        Log.i(TAG, "Model loaded into active memory: $name")
+        Log.i(TAG, "Model loaded into active memory: $name ($languageCode)")
     }
 
     fun unloadModel(type: ModelType, languageCode: String) {

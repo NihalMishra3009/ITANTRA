@@ -7,6 +7,7 @@ import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
 import android.content.Context
 import android.util.Log
+import com.itantra.protocol.BinaryPacketCodec
 import com.itantra.protocol.TextPacket
 import kotlinx.coroutines.*
 import java.io.DataInputStream
@@ -44,6 +45,8 @@ class BluetoothTransport(
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var listenerJob: Job? = null
     private var receiverJob: Job? = null
+
+    private val codec = BinaryPacketCodec()
 
     // Deduplication cache for received message IDs
     private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
@@ -152,11 +155,10 @@ class BluetoothTransport(
             while (isActive && isConnected()) {
                 try {
                     val length = dis.readInt()
-                    if (length in 1..100000) {
+                    if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
-                        val json = String(buffer, Charsets.UTF_8)
-                        val packet = TextPacket.fromJson(json)
+                        val packet = codec.decode(buffer)
 
                         if (packet != null && seenMessageIds.add(packet.messageId)) {
                             Log.i(TAG, "Received valid packet: id=${packet.messageId} lang=${packet.language}")
@@ -185,8 +187,7 @@ class BluetoothTransport(
 
         return try {
             val dos = dataOutputStream ?: return false
-            val json = packet.toJson()
-            val bytes = json.toByteArray(Charsets.UTF_8)
+            val bytes = codec.encode(packet)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()

@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    kotlin("kapt")
 }
 
 android {
@@ -16,7 +17,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         ndk {
-            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64"))
+            abiFilters.addAll(listOf("armeabi-v7a", "arm64-v8a"))
         }
     }
 
@@ -51,7 +52,7 @@ android {
     }
 
     androidResources {
-        noCompress.addAll(listOf("onnx", "tflite", "bin", "json", "vocab", "tokens", "raw", "wav"))
+        noCompress.addAll(listOf("onnx", "tflite", "bin", "json", "vocab", "tokens", "raw", "wav", "txt"))
     }
 }
 
@@ -66,10 +67,13 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.gson)
 
-    // ML on-device runtimes
-    implementation(libs.onnxruntime.android)
-    implementation(libs.tensorflow.lite)
-    implementation(libs.tensorflow.lite.support)
+    // sherpa-onnx: Whisper multilingual ASR + VITS/MMS TTS + ONNX Runtime (bundled) (Apache 2.0)
+    implementation(files("libs/sherpa-onnx-1.13.7.aar"))
+
+    // Room: persistent store-and-forward outbox
+    implementation(libs.room.runtime)
+    implementation(libs.room.ktx)
+    kapt(libs.room.compiler)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

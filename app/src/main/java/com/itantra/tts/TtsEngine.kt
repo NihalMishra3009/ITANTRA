@@ -6,32 +6,93 @@ import com.itantra.ai4bharat.Ai4BharatModelManager
 import com.itantra.ai4bharat.Ai4BharatTtsAdapter
 import com.itantra.ai4bharat.ModelType
 import com.itantra.stt.SupportedLanguage
-import kotlin.math.PI
-import kotlin.math.sin
+import com.k2fsa.sherpa.onnx.OfflineTts
+import com.k2fsa.sherpa.onnx.OfflineTtsConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsKittenModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsMatchaModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsPocketModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsSupertonicModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsZipVoiceModelConfig
 
 /**
- * AI4Bharat Indic-TTS Text-to-Speech Engine.
- * Generates 16-bit 22.05kHz PCM audio waveforms locally across 10 Indian Languages.
+ * Genuine offline neural TTS via sherpa-onnx (ONNX Runtime) + VITS models.
+ *
+ * Model layout in assets: `models/tts/vits_<lang>/model.onnx` + `tokens.txt`.
+ * Real VITS models are bundled per language. If a genuine model is not present
+ * for a language, the engine is NOT marked loaded and synthesize() returns empty
+ * audio — it never emits fake/synthetic speech.
  */
 class TtsEngine(
     private val context: Context,
-    private val modelManager: Ai4BharatModelManager = Ai4BharatModelManager(context)
+    private val modelManager: Ai4BharatModelManager = Ai4BharatModelManager()
 ) : Ai4BharatTtsAdapter {
 
     companion object {
-        private const val TAG = "Ai4BharatTtsEngine"
-        private const val SAMPLE_RATE = 22050
+        private const val TAG = "TtsEngine"
+        private const val SAMPLE_RATE = 24000
     }
 
     private var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
+    private var tts: OfflineTts? = null
     private var isInitialized = false
+    private var hasRealModel = false
 
     override fun initialize(languageCode: String): Boolean {
-        currentLanguage = SupportedLanguage.fromCode(languageCode)
-        modelManager.markLoaded(ModelType.TTS, currentLanguage.code, 0L)
-        isInitialized = true
-        Log.i(TAG, "AI4Bharat Indic-TTS Engine initialized for ${currentLanguage.displayName} (${currentLanguage.code})")
-        return true
+        val lang = SupportedLanguage.fromCode(languageCode)
+        if (isInitialized && tts != null && currentLanguage == lang) {
+            return true
+        }
+        currentLanguage = lang
+        release()
+        hasRealModel = false
+
+        val modelAssetDir = "models/tts/vits_${lang.code}"
+        return try {
+            val model = OfflineTtsVitsModelConfig(
+                model = "$modelAssetDir/model.onnx",
+                lexicon = "",
+                tokens = "$modelAssetDir/tokens.txt",
+                dataDir = "",
+                dictDir = "",
+                noiseScale = 0.667f,
+                noiseScaleW = 0.8f,
+                lengthScale = 1.0f
+            )
+            val modelConfig = OfflineTtsModelConfig(
+                vits = model,
+                matcha = OfflineTtsMatchaModelConfig(),
+                kokoro = OfflineTtsKokoroModelConfig(),
+                zipvoice = OfflineTtsZipVoiceModelConfig(),
+                kitten = OfflineTtsKittenModelConfig(),
+                pocket = OfflineTtsPocketModelConfig(),
+                supertonic = OfflineTtsSupertonicModelConfig(),
+                numThreads = 2,
+                debug = false,
+                provider = "cpu"
+            )
+            val config = OfflineTtsConfig(
+                model = modelConfig,
+                ruleFsts = "",
+                ruleFars = "",
+                maxNumSentences = 1,
+                silenceScale = 1.0f
+            )
+            tts = OfflineTts(assetManager = context.assets, config = config)
+            hasRealModel = true
+            modelManager.markLoaded(ModelType.TTS, lang.code, estimateModelSize(lang.code))
+            Log.i(TAG, "VITS TTS loaded for ${lang.displayName}")
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "No genuine TTS model for ${lang.displayName} — TTS unavailable", e)
+            hasRealModel = false
+            tts = null
+            true
+        } finally {
+            isInitialized = true
+        }
     }
 
     @Synchronized
@@ -42,90 +103,49 @@ class TtsEngine(
         if (!isInitialized || currentLanguage != targetLang) {
             initialize(targetLang.code)
         }
-
         val cleanText = text.trim()
         if (cleanText.isEmpty()) {
-            return TtsResult(ShortArray(0), SAMPLE_RATE, 0, currentLanguage.code)
+            return TtsResult(ShortArray(0), SAMPLE_RATE, 0, targetLang.code)
+        }
+        val engine = tts
+        if (!hasRealModel || engine == null) {
+            Log.w(TAG, "TTS model not available for ${targetLang.code} — cannot synthesize speech")
+            return TtsResult(ShortArray(0), SAMPLE_RATE, System.currentTimeMillis() - startTime, targetLang.code)
         }
 
-        val audioSamples = generateSpeechWaveform(cleanText, isAlert)
-        val duration = System.currentTimeMillis() - startTime
-
-        Log.i(TAG, "AI4Bharat TTS synthesized \"$cleanText\" [${currentLanguage.code}] in ${duration}ms (${audioSamples.size} samples)")
-        return TtsResult(audioSamples, SAMPLE_RATE, duration, currentLanguage.code)
+        return try {
+            val generated = engine.generate(cleanText, sid = 0, speed = 1.0f)
+            val samples = generated.samples
+            val sr = generated.sampleRate
+            val pcm = ShortArray(samples.size) { (samples[it] * 32767).toInt().coerceIn(-32768, 32767).toShort() }
+            val duration = System.currentTimeMillis() - startTime
+            Log.i(TAG, "TTS [${targetLang.code}] ${duration}ms (${pcm.size} samples @ ${sr}Hz)")
+            TtsResult(pcm, sr, duration, targetLang.code)
+        } catch (e: Exception) {
+            Log.e(TAG, "TTS synthesis failed for ${targetLang.code}", e)
+            TtsResult(ShortArray(0), SAMPLE_RATE, System.currentTimeMillis() - startTime, targetLang.code)
+        }
     }
 
-    private fun generateSpeechWaveform(text: String, isAlert: Boolean): ShortArray {
-        val totalList = mutableListOf<Short>()
-
-        // Prepend siren chime if Alert mode
-        if (isAlert) {
-            val chimeDuration = (SAMPLE_RATE * 0.35).toInt()
-            for (i in 0 until chimeDuration) {
-                val t = i.toDouble() / SAMPLE_RATE
-                val freq = if ((i / (SAMPLE_RATE * 0.08).toInt()) % 2 == 0) 900.0 else 1200.0
-                val amp = 28000.0 * (1.0 - (i.toDouble() / chimeDuration) * 0.2)
-                val sample = (amp * sin(2.0 * PI * freq * t)).toInt()
-                totalList.add(sample.coerceIn(-32768, 32767).toShort())
-            }
-            val silenceGap = (SAMPLE_RATE * 0.05).toInt()
-            for (i in 0 until silenceGap) {
-                totalList.add(0)
-            }
-        }
-
-        val words = text.split("\\s+".toRegex()).filter { it.isNotBlank() }
-        val basePitch = when (currentLanguage) {
-            SupportedLanguage.HINDI, SupportedLanguage.MARATHI -> 135.0
-            SupportedLanguage.ENGLISH -> 125.0
-            SupportedLanguage.TAMIL, SupportedLanguage.MALAYALAM -> 145.0
-            SupportedLanguage.TELUGU, SupportedLanguage.KANNADA -> 140.0
-            SupportedLanguage.GUJARATI, SupportedLanguage.BENGALI, SupportedLanguage.ODIA -> 130.0
-        }
-
-        for (word in words) {
-            val charCount = maxOf(word.length, 2)
-            val wordDurationSamples = (SAMPLE_RATE * (0.12 + charCount * 0.04)).toInt()
-
-            val f1 = 500.0 + (word.hashCode() % 250)
-            val f2 = 1500.0 + (word.hashCode() % 400)
-
-            for (i in 0 until wordDurationSamples) {
-                val t = i.toDouble() / SAMPLE_RATE
-                val progress = i.toDouble() / wordDurationSamples
-
-                val envelope = when {
-                    progress < 0.15 -> progress / 0.15
-                    progress > 0.80 -> (1.0 - progress) / 0.20
-                    else -> 1.0
-                }
-
-                val pitch = basePitch + 10.0 * sin(PI * progress)
-                val fundamental = sin(2.0 * PI * pitch * t)
-                val harmonic2 = 0.5 * sin(2.0 * PI * (pitch * 2) * t)
-                val formantResonance1 = 0.3 * sin(2.0 * PI * f1 * t)
-                val formantResonance2 = 0.2 * sin(2.0 * PI * f2 * t)
-
-                val rawSignal = (fundamental + harmonic2 + formantResonance1 + formantResonance2) * envelope
-                val amp = if (isAlert) 28000.0 else 22000.0
-                val sample = (rawSignal * amp).toInt()
-
-                totalList.add(sample.coerceIn(-32768, 32767).toShort())
-            }
-
-            val pauseSamples = (SAMPLE_RATE * 0.06).toInt()
-            for (i in 0 until pauseSamples) {
-                totalList.add(0)
-            }
-        }
-
-        return totalList.toShortArray()
-    }
-
-    override fun isModelLoaded(): Boolean = isInitialized
+    override fun isModelLoaded(): Boolean = hasRealModel
 
     override fun release() {
-        modelManager.unloadModel(ModelType.TTS, currentLanguage.code)
-        isInitialized = false
+        try {
+            tts?.release()
+        } catch (e: Exception) {
+            // ignore
+        } finally {
+            tts = null
+            hasRealModel = false
+            isInitialized = false
+        }
+    }
+
+    private fun estimateModelSize(langCode: String): Long {
+        return try {
+            context.assets.open("models/tts/vits_$langCode/model.onnx").use { it.available().toLong() }
+        } catch (e: Exception) {
+            0L
+        }
     }
 }

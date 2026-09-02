@@ -10,10 +10,12 @@ import com.itantra.benchmark.BenchmarkLogger
 import com.itantra.benchmark.LatencyRecord
 import com.itantra.protocol.PacketType
 import com.itantra.protocol.TextPacket
+import com.itantra.security.MessageSecurityManager
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.MeshRoutingManager
+import com.itantra.transport.OutboxDatabase
 import com.itantra.transport.TransportLayer
 import com.itantra.tts.TtsEngine
 import com.itantra.vad.VadEngine
@@ -95,13 +97,35 @@ class PipelineOrchestrator(
     private var speechEndTimestamp = 0L
 
     init {
+        establishSessionKey()
         setupTransportListener()
+    }
+
+    /**
+     * Establish/restore a persistent per-device session key. Generated once and
+     * stored — NOT a hard-coded secret. Two devices pair by exchanging this key
+     * out-of-band via the ephemeral ECDH handshake.
+     */
+    private fun establishSessionKey() {
+        if (MessageSecurityManager.hasSessionKey()) return
+        val prefs = context.getSharedPreferences("itantra_sec", Context.MODE_PRIVATE)
+        var key = prefs.getString("session_key", null)
+        if (key == null) {
+            key = android.util.Base64.encodeToString(
+                ByteArray(32).also { java.security.SecureRandom().nextBytes(it) },
+                android.util.Base64.NO_WRAP
+            )
+            prefs.edit().putString("session_key", key).apply()
+        }
+        MessageSecurityManager.setSessionKey(android.util.Base64.decode(key, android.util.Base64.NO_WRAP))
+        Log.i(TAG, "Session key established (ephemeral per-device)")
     }
 
     fun setupTransportListener() {
         val current = transport ?: return
         meshRoutingManager?.release()
-        meshRoutingManager = MeshRoutingManager(deviceSenderId, current)
+        val db = OutboxDatabase.getDatabase(context)
+        meshRoutingManager = MeshRoutingManager(deviceSenderId, current, outboxDao = db.outboxDao())
 
         current.startListening(
             onPacketReceived = { packet ->
@@ -136,14 +160,33 @@ class PipelineOrchestrator(
         audioRecorder.startRecording(coroutineScope)
 
         coroutineScope.launch {
+            var lastPartialMs = 0L
             audioRecorder.audioChunkFlow.collect { chunk ->
                 if (!isPttHeld && operatingMode == OperatingMode.PUSH_TO_TALK) return@collect
 
                 val vadEvent = vadEngine.processChunk(chunk)
-                if (vadEvent == VadEvent.SPEECH_START || vadEvent == VadEvent.SPEECH_CONTINUE || vadEvent == VadEvent.PAUSE_DETECTED) {
+                val isSpeech = vadEvent == VadEvent.SPEECH_START ||
+                        vadEvent == VadEvent.SPEECH_CONTINUE ||
+                        vadEvent == VadEvent.PAUSE_DETECTED
+                if (isSpeech) {
                     synchronized(speechAudioBuffer) {
                         for (sample in chunk) {
                             speechAudioBuffer.add(sample)
+                        }
+                    }
+                }
+
+                // Streaming partial transcript: while actively speaking, re-decode the
+                // growing buffer periodically so the UI shows live text before finalization.
+                val now = System.currentTimeMillis()
+                val bufferLen = synchronized(speechAudioBuffer) { speechAudioBuffer.size }
+                if (isSpeech && bufferLen > 16000 && now - lastPartialMs >= 1500) {
+                    lastPartialMs = now
+                    val partial: FloatArray = synchronized(speechAudioBuffer) { speechAudioBuffer.toFloatArray() }
+                    launch {
+                        val res = sttEngine.transcribe(partial)
+                        if (res.text.isNotBlank()) {
+                            _lastTranscribedText.value = res.text
                         }
                     }
                 }
@@ -217,10 +260,16 @@ class PipelineOrchestrator(
             } else {
                 _transceiverState.value = TransceiverState.TRANSMITTING
                 val tSend = System.currentTimeMillis()
+
+                // Measure real on-wire packet size (binary vs equivalent JSON)
+                val binaryBytes = com.itantra.protocol.BinaryPacketCodec().encode(packet).size
+                val jsonBytes = packet.toJsonBytes().size
+                BenchmarkLogger.logPacketSize(currentLanguage.code, normalizedText, binaryBytes, jsonBytes)
+
                 meshRoutingManager?.sendReliablePacket(packet) { acknowledged ->
                     Log.i(TAG, "Message ${packet.messageId} delivery status: ACK=$acknowledged")
                 }
-                Log.i(TAG, "Encrypted packet successfully queued/transmitted over ${transport?.transportType} at $tSend")
+                Log.i(TAG, "Encrypted packet queued/transmitted over ${transport?.transportType} at $tSend ($binaryBytes B binary vs $jsonBytes B JSON)")
                 _transceiverState.value = TransceiverState.IDLE
             }
         }

@@ -6,128 +6,149 @@ import com.itantra.ai4bharat.Ai4BharatModelManager
 import com.itantra.ai4bharat.Ai4BharatSttAdapter
 import com.itantra.ai4bharat.IndicTextNormalizer
 import com.itantra.ai4bharat.ModelType
-import org.tensorflow.lite.Interpreter
+import com.k2fsa.sherpa.onnx.FeatureConfig
+import com.k2fsa.sherpa.onnx.HomophoneReplacerConfig
+import com.k2fsa.sherpa.onnx.OfflineCohereTranscribeModelConfig
+import com.k2fsa.sherpa.onnx.OfflineDolphinModelConfig
+import com.k2fsa.sherpa.onnx.OfflineFireRedAsrCtcModelConfig
+import com.k2fsa.sherpa.onnx.OfflineFireRedAsrModelConfig
+import com.k2fsa.sherpa.onnx.OfflineFunAsrNanoModelConfig
+import com.k2fsa.sherpa.onnx.OfflineMedAsrCtcModelConfig
+import com.k2fsa.sherpa.onnx.OfflineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineMoonshineModelConfig
+import com.k2fsa.sherpa.onnx.OfflineNemoEncDecCtcModelConfig
+import com.k2fsa.sherpa.onnx.OfflineOmnilingualAsrCtcModelConfig
+import com.k2fsa.sherpa.onnx.OfflineParaformerModelConfig
+import com.k2fsa.sherpa.onnx.OfflineQwen3AsrModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizer
+import com.k2fsa.sherpa.onnx.OfflineCanaryModelConfig
+import com.k2fsa.sherpa.onnx.OfflineRecognizerConfig
+import com.k2fsa.sherpa.onnx.OfflineSenseVoiceModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
+import com.k2fsa.sherpa.onnx.OfflineWenetCtcModelConfig
+import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
+import com.k2fsa.sherpa.onnx.OfflineZipformerCtcModelConfig
 import java.io.File
-import java.io.FileInputStream
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import java.nio.MappedByteBuffer
-import java.nio.channels.FileChannel
+import java.io.FileOutputStream
 
 /**
- * AI4Bharat IndicConformer Speech-to-Text Engine.
- * Supports CTC decoding and offline acoustic pattern inference across 10 Indian languages.
+ * Genuine offline multilingual STT via sherpa-onnx (ONNX Runtime) + OpenAI Whisper tiny int8.
+ * ONE Whisper model covers all 10 iTantra languages (hi, en, gu, mr, kn, ml, ta, te, or, bn).
+ * Runs entirely on-device, no network.
  */
 class SttEngine(
     private val context: Context,
-    private val modelManager: Ai4BharatModelManager = Ai4BharatModelManager(context)
+    private val modelManager: Ai4BharatModelManager = Ai4BharatModelManager()
 ) : Ai4BharatSttAdapter {
 
     companion object {
-        private const val TAG = "Ai4BharatSttEngine"
-        private const val BLANK_TOKEN_ID = 0
+        private const val TAG = "WhisperSttEngine"
+        private const val SAMPLING_RATE = 16000
+        private const val ENCODER_ASSET = "models/stt/whisper-tiny-encoder.int8.onnx"
+        private const val DECODER_ASSET = "models/stt/whisper-tiny-decoder.int8.onnx"
+        private const val TOKENS_ASSET = "models/stt/whisper-tiny-tokens.txt"
+        private const val MIN_MODEL_SIZE_BYTES = 1024 * 1024
     }
 
     private var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
-    private var interpreter: Interpreter? = null
-    private var vocabulary: List<String> = emptyList()
+    private var recognizer: OfflineRecognizer? = null
     private var isInitialized = false
-
-    private val languagePhraseLexicons = mapOf(
-        "hi" to listOf(
-            "मुझे मदद चाहिए", "तुरंत सहायता भेजें", "स्थान सुरक्षित है", "दवाइयों की आवश्यकता है",
-            "जल स्तर बढ़ रहा है", "हम सुरक्षित स्थान पर हैं", "आपातकालीन स्थिति", "रास्ता साफ है",
-            "डॉक्टर को बुलाओ", "भोजन और पानी की आवश्यकता है", "संपर्क स्थापित हुआ", "कृपया अपनी स्थिति बताएं",
-            "नमस्ते कैसे हो", "ध्वनि स्पष्ट है", "हम आ रहे हैं"
-        ),
-        "mr" to listOf(
-            "मला मदतीची गरज आहे", "तातडीने मदत पाठवा", "जागा सुरक्षित आहे", "औषधांची गरज आहे",
-            "पाण्याची पातळी वाढत आहे", "आम्ही सुरक्षित ठिकाणी आहोत", "आणीबाणीची परिस्थिती", "रस्ता मोकळा आहे",
-            "डॉक्टरला बोलवा", "अन्न आणि पाण्याची गरज आहे"
-        ),
-        "bn" to listOf(
-            "আমার সাহায্য প্রয়োজন", "অবিলম্বে সাহায্য পাঠান", "স্থান নিরাপদ আছে", "ওষুধের প্রয়োজন",
-            "জলের স্তর বাড়ছে", "আমরা নিরাপদ স্থানে আছি", "জরুরী অবস্থা", "রাস্তা পরিষ্কার আছে"
-        ),
-        "gu" to listOf(
-            "મને મદદ જોઈએ છે", "તાત્કાલિક સહાય મોકલો", "સ્થાન સુરક્ષિત છે", "દવાઓની જરૂર છે",
-            "પાણીનું સ્તર વધી રહ્યું છે", "અમે સલામત સ્થળે છીએ", "કટોકટીની સ્થિતિ", "રસ્તો સાફ છે"
-        ),
-        "or" to listOf(
-            "ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "ତୁରନ୍ତ ସାହାଯ୍ୟ ପଠାନ୍ତୁ", "ସ୍ଥାନ ସୁରକ୍ଷିତ ଅଛି", "ଔଷଧ ଆବଶ୍ୟକ",
-            "ଜଳସ୍ତର ବୃଦ୍ଧି ପାଉଛି", "ଆମେ ସୁରକ୍ଷିତ ସ୍ଥାନରେ ଅଛୁ", "ଜରୁରୀକାଳୀନ ପରିସ୍ଥିତି", "ରାସ୍ତା ସଫା ଅଛି"
-        ),
-        "ta" to listOf(
-            "எனக்கு உதவி தேவை", "உடனடி உதவி அனுப்பவும்", "இடம் பாதுகாப்பாக உள்ளது", "மருந்துகள் தேவை",
-            "நீர் மட்டம் உயர்கிறது", "நாங்கள் பாதுகாப்பான இடத்தில் உள்ளோம்", "அவசர நிலை", "பாதை தெளிவாக உள்ளது"
-        ),
-        "te" to listOf(
-            "నాకు సహాయం కావాలి", "వెంటనే సహాయం పంపండి", "ప్రదేశం సురక్షితంగా ఉంది", "మందులు అవసరం",
-            "నీటి మట్టం పెరుగుతోంది", "మేము సురక్షిత ప్రదేశంలో ఉన్నాము", "అత్యవసర పరిస్థితి", "దారి స్పష్టంగా ఉంది"
-        ),
-        "kn" to listOf(
-            "ನನಗೆ ಸಹಾಯ ಬೇಕು", "ತಕ್ಷಣ ಸಹಾಯ ಕಳುಹಿಸಿ", "ಸ್ಥಳ ಸುರಕ್ಷಿತವಾಗಿದೆ", "ಔಷಧಿಗಳ ಅವಶ್ಯಕತೆಯಿದೆ",
-            "ನೀರಿನ ಮಟ್ಟ ಹೆಚ್ಚುತ್ತಿದೆ", "ನಾವು ಸುರಕ್ಷಿತ ಸ್ಥಳದಲ್ಲಿದ್ದೇವೆ", "ತುರ್ತು ಪರಿಸ್ಥಿತಿ", "ದಾರಿ ಸ್ಪಷ್ಟವಾಗಿದೆ"
-        ),
-        "ml" to listOf(
-            "എനിക്ക് സഹായം വേണം", "ഉടൻ സഹായം അയക്കുക", "സ്ഥലം സുരക്ഷിതമാണ്", "മരുന്നുകൾ ആവശ്യമാണ്",
-            "വെള്ളപ്പൊക്കം കൂടുന്നു", "ഞങ്ങൾ സുരക്ഷിത സ്ഥാനത്താണ്", "അടിയന്തിര സാഹചര്യം", "വഴി വ്യക്തമാണ്"
-        ),
-        "en" to listOf(
-            "I need assistance", "Send immediate help", "Location is secure", "Medical supplies required",
-            "Water level is rising", "We are at safe point", "Emergency situation", "Route is clear",
-            "Call doctor immediately", "Food and water needed", "Connection established", "Please report status",
-            "Hello how are you", "Audio is clear", "We are on the way"
-        )
-    )
+    private var hasRealModel = false
 
     override fun initialize(languageCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(languageCode)
-        if (isInitialized && currentLanguage == lang && interpreter != null) {
+        if (isInitialized && recognizer != null && currentLanguage == lang) {
             return true
         }
-
         currentLanguage = lang
         release()
+        hasRealModel = false
 
-        val modelFile = modelManager.getModelFile(ModelType.STT, lang.code)
-        try {
-            if (modelFile != null && modelFile.exists() && modelFile.length() > 0) {
-                val buffer = loadModelFile(modelFile)
-                val options = Interpreter.Options().apply {
-                    setNumThreads(2)
-                    setUseNNAPI(false)
-                }
-                interpreter = Interpreter(buffer, options)
-                modelManager.markLoaded(ModelType.STT, lang.code, modelFile.length())
-                Log.i(TAG, "AI4Bharat IndicConformer STT model loaded for ${lang.displayName}")
-            } else {
-                modelManager.markLoaded(ModelType.STT, lang.code, 0L)
-                Log.i(TAG, "AI4Bharat Acoustic engine loaded for ${lang.displayName}")
-            }
-            loadVocabulary(lang.code)
-            isInitialized = true
-            return true
-        } catch (e: Exception) {
-            Log.w(TAG, "Using robust fallback STT for ${lang.displayName}", e)
-            loadVocabulary(lang.code)
-            isInitialized = true
-            return true
-        }
-    }
+        return try {
+            val encoder = copyAssetToFile(context, ENCODER_ASSET, "whisper_tiny_encoder.onnx")
+            val decoder = copyAssetToFile(context, DECODER_ASSET, "whisper_tiny_decoder.onnx")
+            val tokens = copyAssetToFile(context, TOKENS_ASSET, "whisper_tiny_tokens.txt")
 
-    private fun loadVocabulary(langCode: String) {
-        val vocabAssetPath = "models/stt/vocab_${langCode}.json"
-        try {
-            context.assets.open(vocabAssetPath).use { stream ->
-                val json = stream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                val parsed = com.google.gson.Gson().fromJson(json, Array<String>::class.java)
-                vocabulary = parsed.toList()
-                Log.i(TAG, "Loaded vocabulary for $langCode: ${vocabulary.size} tokens")
-                return
+            if (encoder == null || decoder == null || tokens == null ||
+                encoder.length() < MIN_MODEL_SIZE_BYTES || decoder.length() < MIN_MODEL_SIZE_BYTES
+            ) {
+                Log.e(TAG, "Whisper models missing or invalid for ${lang.displayName}")
+                isInitialized = true
+                return true
             }
+
+            val whisperConfig = OfflineWhisperModelConfig(
+                encoder = encoder.absolutePath,
+                decoder = decoder.absolutePath,
+                language = lang.code,
+                task = "transcribe",
+                tailPaddings = -1,
+                enableTokenTimestamps = false,
+                enableSegmentTimestamps = false
+            )
+
+            val featConfig = FeatureConfig(
+                sampleRate = SAMPLING_RATE,
+                featureDim = 80,
+                dither = 0.0f
+            )
+
+            val modelConfig = OfflineModelConfig(
+                transducer = OfflineTransducerModelConfig(),
+                paraformer = OfflineParaformerModelConfig(),
+                whisper = whisperConfig,
+                fireRedAsr = OfflineFireRedAsrModelConfig(),
+                moonshine = OfflineMoonshineModelConfig(),
+                nemo = OfflineNemoEncDecCtcModelConfig(),
+                senseVoice = OfflineSenseVoiceModelConfig(),
+                dolphin = OfflineDolphinModelConfig(),
+                zipformerCtc = OfflineZipformerCtcModelConfig(),
+                wenetCtc = OfflineWenetCtcModelConfig(),
+                omnilingual = OfflineOmnilingualAsrCtcModelConfig(),
+                medasr = OfflineMedAsrCtcModelConfig(),
+                funasrNano = OfflineFunAsrNanoModelConfig(),
+                qwen3Asr = OfflineQwen3AsrModelConfig(),
+                fireRedAsrCtc = OfflineFireRedAsrCtcModelConfig(),
+                canary = OfflineCanaryModelConfig(),
+                cohereTranscribe = OfflineCohereTranscribeModelConfig(),
+                teleSpeech = "",
+                numThreads = 2,
+                debug = false,
+                provider = "cpu",
+                modelType = "",
+                tokens = tokens.absolutePath,
+                modelingUnit = "",
+                bpeVocab = ""
+            )
+
+            val config = OfflineRecognizerConfig(
+                featConfig = featConfig,
+                modelConfig = modelConfig,
+                hr = HomophoneReplacerConfig(),
+                decodingMethod = "greedy_search",
+                maxActivePaths = 4,
+                hotwordsFile = "",
+                hotwordsScore = 1.5f,
+                ruleFsts = "",
+                ruleFars = "",
+                blankPenalty = 0.0f
+            )
+
+            recognizer = OfflineRecognizer(assetManager = context.assets, config = config)
+            hasRealModel = true
+            modelManager.markLoaded(
+                ModelType.STT, lang.code,
+                encoder.length() + decoder.length()
+            )
+            Log.i(TAG, "Whisper multilingual STT ready for ${lang.displayName} (all 10 languages)")
+            true
         } catch (e: Exception) {
-            vocabulary = listOf("<blank>", " ") + ('\u0900'..'\u097F').map { it.toString() }
+            Log.e(TAG, "Failed to initialize Whisper STT", e)
+            hasRealModel = false
+            recognizer = null
+            true
+        } finally {
+            isInitialized = true
         }
     }
 
@@ -136,123 +157,64 @@ class SttEngine(
         val startTime = System.currentTimeMillis()
         val targetLang = if (languageCode.isNotBlank()) SupportedLanguage.fromCode(languageCode) else currentLanguage
 
-        if (!isInitialized || currentLanguage != targetLang) {
+        if (!isInitialized || recognizer == null || currentLanguage != targetLang) {
             initialize(targetLang.code)
         }
+        val rec = recognizer ?: return SttResult("", targetLang.code, 0)
 
         if (audioChunk.isEmpty()) {
-            return SttResult("", currentLanguage.code, 0)
+            return SttResult("", targetLang.code, 0)
+        }
+        if (!hasRealModel) {
+            Log.w(TAG, "STT model not available — returning empty transcript")
+            return SttResult("", targetLang.code, System.currentTimeMillis() - startTime)
         }
 
-        val rawText = if (interpreter != null) {
-            runModelInference(audioChunk)
-        } else {
-            runAcousticMatchingInference(audioChunk)
-        }
-
-        // Apply AI4Bharat Unicode Text Normalization
-        val normalizedText = IndicTextNormalizer.normalize(rawText, currentLanguage.code)
-        val duration = System.currentTimeMillis() - startTime
-
-        Log.i(TAG, "Transcribed [${currentLanguage.code}] in ${duration}ms: \"$normalizedText\"")
-        return SttResult(normalizedText, currentLanguage.code, duration)
-    }
-
-    private fun runModelInference(audioChunk: FloatArray): String {
         return try {
-            val interp = interpreter ?: return runAcousticMatchingInference(audioChunk)
-
-            val inputBuffer = ByteBuffer.allocateDirect(audioChunk.size * 4).apply {
-                order(ByteOrder.nativeOrder())
-                audioChunk.forEach { putFloat(it) }
-                rewind()
+            val stream = rec.createStream()
+            try {
+                stream.acceptWaveform(audioChunk, SAMPLING_RATE)
+                rec.decode(stream)
+                val result = rec.getResult(stream)
+                val rawText = result.text.trim()
+                val normalizedText = IndicTextNormalizer.normalize(rawText, targetLang.code)
+                val duration = System.currentTimeMillis() - startTime
+                Log.i(TAG, "Whisper [${targetLang.code}] ${duration}ms: \"$normalizedText\"")
+                SttResult(normalizedText, targetLang.code, duration, 0.9f)
+            } finally {
+                stream.release()
             }
-
-            val outputShape = interp.getOutputTensor(0).shape()
-            val timeSteps = if (outputShape.size >= 2) outputShape[1] else 64
-            val vocabSize = if (outputShape.size >= 3) outputShape[2] else 128
-
-            val outputBuffer = Array(1) { Array(timeSteps) { FloatArray(vocabSize) } }
-            interp.run(inputBuffer, outputBuffer)
-
-            decodeCtc(outputBuffer[0])
         } catch (e: Exception) {
-            Log.w(TAG, "Interpreter inference failed, falling back to acoustic matching", e)
-            runAcousticMatchingInference(audioChunk)
+            Log.e(TAG, "Whisper inference failed", e)
+            SttResult("", targetLang.code, System.currentTimeMillis() - startTime)
         }
     }
 
-    fun decodeCtc(logits: Array<FloatArray>): String {
-        val sb = StringBuilder()
-        var prevToken = BLANK_TOKEN_ID
-
-        for (frame in logits) {
-            var maxIdx = 0
-            var maxVal = Float.NEGATIVE_INFINITY
-            for (i in frame.indices) {
-                if (frame[i] > maxVal) {
-                    maxVal = frame[i]
-                    maxIdx = i
-                }
-            }
-
-            if (maxIdx != BLANK_TOKEN_ID && maxIdx != prevToken) {
-                if (maxIdx < vocabulary.size) {
-                    sb.append(vocabulary[maxIdx])
-                }
-            }
-            prevToken = maxIdx
-        }
-
-        val decoded = sb.toString().trim()
-        return if (decoded.isNotEmpty()) decoded else runAcousticMatchingInference(FloatArray(0))
-    }
-
-    private fun runAcousticMatchingInference(audioChunk: FloatArray): String {
-        val phrases = languagePhraseLexicons[currentLanguage.code] ?: languagePhraseLexicons["hi"]!!
-        if (phrases.isEmpty()) return "सहायता की आवश्यकता है"
-
-        if (audioChunk.isEmpty()) {
-            return phrases[0]
-        }
-
-        var energySum = 0.0
-        var peakCount = 0
-        var inPeak = false
-        val threshold = 0.03f
-
-        for (v in audioChunk) {
-            val absV = Math.abs(v)
-            energySum += absV
-            if (absV > threshold && !inPeak) {
-                peakCount++
-                inPeak = true
-            } else if (absV < threshold * 0.5f) {
-                inPeak = false
-            }
-        }
-
-        val phraseIndex = (Math.abs((energySum * 100).toInt() + peakCount * 3) % phrases.size)
-        return phrases[phraseIndex]
-    }
-
-    override fun isModelLoaded(): Boolean = isInitialized
+    override fun isModelLoaded(): Boolean = hasRealModel
 
     override fun release() {
         try {
-            interpreter?.close()
+            recognizer?.release()
         } catch (e: Exception) {
-            // Ignore
+            // ignore
         } finally {
-            interpreter = null
-            modelManager.unloadModel(ModelType.STT, currentLanguage.code)
+            recognizer = null
+            hasRealModel = false
             isInitialized = false
         }
     }
 
-    private fun loadModelFile(file: File): MappedByteBuffer {
-        val fileInputStream = FileInputStream(file)
-        val fileChannel = fileInputStream.channel
-        return fileChannel.map(FileChannel.MapMode.READ_ONLY, 0, file.length())
+    private fun copyAssetToFile(context: Context, assetPath: String, targetName: String): File? {
+        return try {
+            val target = File(context.filesDir, targetName)
+            if (target.exists() && target.length() > 0) return target
+            context.assets.open(assetPath).use { input ->
+                FileOutputStream(target).use { output -> input.copyTo(output) }
+            }
+            target
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to copy asset $assetPath", e)
+            null
+        }
     }
 }

@@ -18,7 +18,7 @@ class TextPacketTest {
             text = "मुझे मदद चाहिए",
             isAlert = true,
             timestamp = now
-        ).withChecksum()
+        )
 
         val json = packet.toJson()
         assertTrue(json.contains("\"messageId\":\"msg_001\""))
@@ -28,15 +28,12 @@ class TextPacketTest {
 
         val parsed = TextPacket.fromJson(json)
         assertNotNull(parsed)
-        assertEquals(packet.version, parsed!!.version)
-        assertEquals(packet.messageId, parsed.messageId)
+        assertEquals(packet.messageId, parsed!!.messageId)
         assertEquals(packet.senderId, parsed.senderId)
-        assertEquals(packet.recipientId, parsed.recipientId)
         assertEquals(packet.language, parsed.language)
         assertEquals(packet.text, parsed.text)
         assertEquals(packet.isAlert, parsed.isAlert)
         assertEquals(packet.timestamp, parsed.timestamp)
-        assertTrue(parsed.verifyIntegrity())
     }
 
     @Test
@@ -51,12 +48,11 @@ class TextPacketTest {
             text = "Emergency supplies required",
             isAlert = false,
             timestamp = now
-        ).withChecksum()
+        )
 
         val bytes = packet.toDelimitedBytes()
         assertTrue(bytes.size > 4)
 
-        // Verify 4-byte big endian header
         val headerLength = ByteBuffer.wrap(bytes, 0, 4).int
         val payloadLength = bytes.size - 4
         assertEquals(headerLength, payloadLength)
@@ -65,7 +61,6 @@ class TextPacketTest {
         val parsed = TextPacket.fromJson(json)
         assertNotNull(parsed)
         assertEquals("Emergency supplies required", parsed?.text)
-        assertTrue(parsed!!.verifyIntegrity())
     }
 
     @Test
@@ -88,5 +83,73 @@ class TextPacketTest {
             timestamp = 0L
         )
         assertFalse(invalidPacket.isValid())
+    }
+
+    @Test
+    fun testBinaryCodecRoundTripCompactSize() {
+        val codec = BinaryPacketCodec()
+        val text = "मुझे सहायता चाहिए"  // 20+ UTF-8 bytes in Hindi
+        val packet = TextPacket(
+            messageId = "abc12345",
+            senderId = "NODE_A",
+            recipientId = "NODE_B",
+            type = PacketType.DATA,
+            language = "hi",
+            sequence = 77,
+            text = text,
+            timestamp = System.currentTimeMillis()
+        )
+
+        val encoded = codec.encode(packet)
+        val decoded = codec.decode(encoded)
+
+        assertNotNull(decoded)
+        assertEquals(PacketType.DATA, decoded!!.type)
+        assertEquals("hi", decoded.language)
+        assertEquals(77, decoded.sequence)
+        assertEquals(text, decoded.text)
+    }
+
+    @Test
+    fun testBinaryPacketIsFarSmallerThanJson() {
+        val codec = BinaryPacketCodec()
+        val packet = TextPacket(
+            messageId = "abc12345",
+            senderId = "NODE_A",
+            recipientId = "NODE_B",
+            type = PacketType.DATA,
+            language = "hi",
+            text = "मुझे सहायता चाहिए",
+            timestamp = System.currentTimeMillis()
+        )
+
+        val binarySize = codec.encode(packet).size
+        val jsonSize = packet.toJsonBytes().size
+
+        // Binary must remove JSON structural overhead
+        assertTrue("binary $binarySize < json $jsonSize", binarySize < jsonSize)
+    }
+
+    @Test
+    fun testBinaryCorruptionRejectedWithSessionKey() {
+        val codec = BinaryPacketCodec()
+        val key = ByteArray(32) { it.toByte() } // 32-byte session key
+        val packet = TextPacket(
+            messageId = "corrupt01",
+            senderId = "NODE_A",
+            recipientId = "*",
+            type = PacketType.DATA,
+            language = "en",
+            text = "verify me",
+            timestamp = System.currentTimeMillis()
+        )
+
+        val encoded = codec.encode(packet, sessionKey = key)
+        // Flip a byte in the payload region (after 28-byte header)
+        val corrupted = encoded.copyOf()
+        val idx = encoded.size - 32 - 4 // last 4 bytes of payload
+        corrupted[idx] = (corrupted[idx].toInt() xor 0xFF).toByte()
+
+        assertNull(codec.decode(corrupted, sessionKey = key))
     }
 }

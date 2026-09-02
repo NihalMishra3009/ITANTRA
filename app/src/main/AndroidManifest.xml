@@ -24,13 +24,13 @@
     <uses-permission android:name="android.permission.NEARBY_WIFI_DEVICES" tools:targetApi="33"
         android:usesPermissionFlags="neverForLocation" />
 
-    <!-- Location required for P2P / BT discovery on older Android versions -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Location required for P2P / BT discovery on Android 11 and below -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
 
     <application
         android:name=".iTantraApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"

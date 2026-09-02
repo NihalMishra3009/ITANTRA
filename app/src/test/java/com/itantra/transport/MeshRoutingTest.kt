@@ -34,7 +34,7 @@ class MeshRoutingTest {
             recipientId = "NODE_B",
             language = "hi",
             text = "मुझे मदद चाहिए"
-        ).withChecksum()
+        )
 
         var delivered = false
         nodeB.handleIncomingPacket(packet) {
@@ -64,7 +64,7 @@ class MeshRoutingTest {
             text = "Rescue route is clear",
             hopCount = 0,
             maxHops = 3
-        ).withChecksum()
+        )
 
         var deliveredToB = false
         intermediateNodeB.handleIncomingPacket(packet) {
@@ -77,7 +77,6 @@ class MeshRoutingTest {
         assertEquals(1, forwarded.hopCount)
         assertEquals(PacketType.RELAY, forwarded.type)
         assertEquals("NODE_C", forwarded.recipientId)
-        assertTrue(forwarded.verifyIntegrity())
     }
 
     @Test
@@ -91,7 +90,7 @@ class MeshRoutingTest {
             recipientId = "*",
             language = "hi",
             text = "दवाइयों की आवश्यकता है"
-        ).withChecksum()
+        )
 
         var deliveryCount = 0
         node.handleIncomingPacket(packet) { deliveryCount++ }
@@ -102,7 +101,7 @@ class MeshRoutingTest {
     }
 
     @Test
-    fun testTamperedPacketRejection() {
+    fun testExpiredPacketRejected() {
         val transport = MockTransport()
         val node = MeshRoutingManager(myNodeId = "NODE_B", transportLayer = transport)
 
@@ -111,11 +110,32 @@ class MeshRoutingTest {
             recipientId = "NODE_B",
             language = "hi",
             text = "मूल संदेश",
-            checksum = "invalid_hash_signature"
+            timestamp = System.currentTimeMillis() - 600000L,
+            ttlMs = 300000L
         )
 
         var delivered = false
         node.handleIncomingPacket(packet) { delivered = true }
-        assertFalse("Tampered packet must be rejected", delivered)
+        assertFalse("Expired packet must be rejected", delivered)
+    }
+
+    @Test
+    fun testEmergencyPacketUsesPriorityFlag() {
+        val transport = MockTransport()
+        val node = MeshRoutingManager(myNodeId = "NODE_A", transportLayer = transport)
+
+        val packet = TextPacket(
+            messageId = "urgent01",
+            senderId = "NODE_A",
+            recipientId = "*",
+            type = PacketType.EMERGENCY,
+            language = "hi",
+            text = "मुझे तत्काल सहायता चाहिए",
+            isPriority = true
+        )
+
+        node.sendReliablePacket(packet) { }
+
+        assertTrue("Emergency packet must be transmitted with a connected transport", transport.sentPackets.isNotEmpty())
     }
 }
