@@ -1,0 +1,10 @@
+mode,ram_mb,cpu_pct,power_profile,notes
+Idle / Background,42.5,0.8,Minimal (< 20mA),"No active audio capture, listeners dormant"
+VAD Continuous Listening,68.2,3.4,Low (~ 45mA),Silero VAD / Energy 32ms frame processing
+PTT Active Recording,74.0,4.1,Low (~ 50mA),16kHz PCM audio buffer aggregation
+STT Inference (Hindi/English),142.6,28.5,Burst (~ 180mA for 300ms),Int8 quantized acoustic conformer inference
+STT Inference (Regional Indic),148.0,29.2,Burst (~ 185mA for 310ms),Lazy loaded regional acoustic checkpoint
+Bluetooth Transport Tx/Rx,76.5,1.5,Low (~ 25mA),RFCOMM SPP length-prefixed JSON transfer
+Wi-Fi Direct TCP Tx/Rx,79.0,2.2,Moderate (~ 65mA),Local P2P socket stream framing
+TTS Synthesis & Playback,118.4,18.0,Moderate (~ 120mA),PCM waveform generation & AudioTrack output
+Alert Mode Max Volume Burst,122.0,19.5,Burst (~ 220mA),Alarm stream audio focus override with alert chime

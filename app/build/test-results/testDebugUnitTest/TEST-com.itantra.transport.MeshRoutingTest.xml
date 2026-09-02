@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.itantra.transport.MeshRoutingTest" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-09-02T13:47:14" hostname="NIHAL_ASUS" time="0.069">
+  <properties/>
+  <testcase name="testUnicastDeliveryAndAck" classname="com.itantra.transport.MeshRoutingTest" time="0.051"/>
+  <testcase name="testTamperedPacketRejection" classname="com.itantra.transport.MeshRoutingTest" time="0.002"/>
+  <testcase name="testDuplicatePacketSuppression" classname="com.itantra.transport.MeshRoutingTest" time="0.006"/>
+  <testcase name="testMultiHopRelayForwarding" classname="com.itantra.transport.MeshRoutingTest" time="0.009"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

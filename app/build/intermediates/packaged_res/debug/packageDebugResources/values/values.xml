@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="accent_amber">#F59E0B</color>
+    <color name="accent_green">#10B981</color>
+    <color name="accent_red">#EF4444</color>
+    <color name="background">#090D16</color>
+    <color name="card_stroke">#334155</color>
+    <color name="on_primary">#FFFFFF</color>
+    <color name="primary">#0F172A</color>
+    <color name="primary_variant">#0284C7</color>
+    <color name="ptt_active">#DC2626</color>
+    <color name="ptt_idle">#0284C7</color>
+    <color name="secondary">#06B6D4</color>
+    <color name="surface">#131B2E</color>
+    <color name="surface_variant">#1E293B</color>
+    <color name="text_primary">#F8FAFC</color>
+    <color name="text_secondary">#94A3B8</color>
+    <string name="alert_mode_btn">ALERT / SOS</string>
+    <string name="app_name">iTantra</string>
+    <string name="mode_continuous">Continuous Conversation</string>
+    <string name="mode_ptt">Push-To-Talk (PTT)</string>
+    <string name="ptt_hold_to_talk">HOLD TO TALK</string>
+    <string name="ptt_release_to_send">RELEASE TO SEND</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_listening">Listening (VAD Active)…</string>
+    <string name="status_synthesizing">Synthesizing (TTS)…</string>
+    <string name="status_transcribing">Transcribing (STT)…</string>
+    <string name="status_transmitting">Transmitting Packet…</string>
+    <string name="tagline">Offline Multilingual Neural Transceiver (ISRO PS 26173)</string>
+    <style name="Theme.ITantra" parent="Theme.Material3.Dark.NoActionBar">
+        <item name="colorPrimary">@color/secondary</item>
+        <item name="colorOnPrimary">@color/primary</item>
+        <item name="android:statusBarColor">@color/background</item>
+        <item name="android:navigationBarColor">@color/background</item>
+        <item name="android:windowBackground">@color/background</item>
+    </style>
+</resources>

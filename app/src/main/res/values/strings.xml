@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">iTantra</string>
+    <string name="tagline">Offline Multilingual Neural Transceiver (ISRO PS 26173)</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_connected">Connected</string>
+    <string name="status_listening">Listening (VAD Active)…</string>
+    <string name="status_transcribing">Transcribing (STT)…</string>
+    <string name="status_synthesizing">Synthesizing (TTS)…</string>
+    <string name="status_transmitting">Transmitting Packet…</string>
+    <string name="ptt_hold_to_talk">HOLD TO TALK</string>
+    <string name="ptt_release_to_send">RELEASE TO SEND</string>
+    <string name="alert_mode_btn">ALERT / SOS</string>
+    <string name="mode_ptt">Push-To-Talk (PTT)</string>
+    <string name="mode_continuous">Continuous Conversation</string>
+</resources>

@@ -1,0 +1,19 @@
+{
+    "logs": [
+        {
+            "outputFile": "com.itantra.app-mergeDebugResources-32:/values-h550dp-port-v13/values-h550dp-port-v13.xml",
+            "map": [
+                {
+                    "source": "C:\\Users\\nihal\\.gradle\\caches\\transforms-4\\f338b50c04251ac0d75a9e0c2753e31b\\transformed\\material-1.12.0\\res\\values-h550dp-port-v13\\values-h550dp-port-v13.xml",
+                    "from": {
+                        "startLines": "2",
+                        "startColumns": "4",
+                        "startOffsets": "55",
+                        "endColumns": "64",
+                        "endOffsets": "115"
+                    }
+                }
+            ]
+        }
+    ]
+}

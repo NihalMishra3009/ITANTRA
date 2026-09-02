@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="com.itantra.ml.SttTtsEngineTest" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-09-02T13:47:13" hostname="NIHAL_ASUS" time="0.055">
+  <properties/>
+  <testcase name="testTtsWaveformSynthesisGeneration" classname="com.itantra.ml.SttTtsEngineTest" time="0.019"/>
+  <testcase name="testAllTenLanguagesSupported" classname="com.itantra.ml.SttTtsEngineTest" time="0.033"/>
+  <testcase name="testCtcGreedyDecoderAlgorithm" classname="com.itantra.ml.SttTtsEngineTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,13 @@
+scenario,language,speech_duration_ms,stt_latency_ms,transport_latency_ms,tts_latency_ms,playback_init_ms,total_e2e_latency_ms,rtf
+Hindi Short Phrase (PTT),hi,1200,280,45,190,15,530,0.233
+Hindi Distress Alert (SOS),hi,1600,310,42,210,10,572,0.194
+English Short Phrase (PTT),en,1100,250,38,180,15,483,0.227
+English Continuous Mode,en,1800,340,40,220,12,612,0.189
+Gujarati Emergency Message,gu,1400,290,44,195,15,544,0.207
+Marathi Field Coordination,mr,1500,305,41,200,14,560,0.203
+Kannada Rescue Update,kn,1350,295,46,192,15,548,0.219
+Malayalam Medical Request,ml,1450,315,43,205,14,577,0.217
+Tamil Flood Warning,ta,1600,320,40,210,15,585,0.2
+Telugu Resource Dispatch,te,1400,300,45,198,15,558,0.214
+Odia Route Clearance,or,1300,285,42,188,14,529,0.219
+Bengali Safe Point Arrival,bn,1550,310,44,202,15,571,0.2
