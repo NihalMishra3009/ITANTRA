@@ -24,7 +24,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import java.util.UUID
 
 enum class OperatingMode {
     PUSH_TO_TALK,
@@ -60,7 +59,11 @@ class PipelineOrchestrator(
         private const val TAG = "PipelineOrchestrator"
     }
 
-    val deviceSenderId = "NODE_" + UUID.randomUUID().toString().substring(0, 4).uppercase()
+    private val myNodeIdValue: String
+    val deviceSenderId: String
+
+    val deliveryTracker = com.itantra.transport.DeliveryTracker()
+
     private val coroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
     var meshRoutingManager: MeshRoutingManager? = null
@@ -97,8 +100,12 @@ class PipelineOrchestrator(
     private var speechEndTimestamp = 0L
 
     init {
+        val nodeProfile = com.itantra.identity.NodeIdentity.initialize(context)
+        myNodeIdValue = nodeProfile.nodeId
+        deviceSenderId = nodeProfile.nodeId
         establishSessionKey()
         setupTransportListener()
+        startDiscoveryAdvertising()
     }
 
     /**
@@ -125,7 +132,20 @@ class PipelineOrchestrator(
         val current = transport ?: return
         meshRoutingManager?.release()
         val db = OutboxDatabase.getDatabase(context)
-        meshRoutingManager = MeshRoutingManager(deviceSenderId, current, outboxDao = db.outboxDao())
+        val discoveryManager = com.itantra.transport.NetworkDiscoveryManager(deviceSenderId)
+        discoveryManager.onRouteResponseReady = { response ->
+            current.sendPacket(response)
+        }
+        discoveryManager.onRouteDiscovered = { viaNode, dest, nextHop, hops ->
+            Log.i(TAG, "Route discovered to $dest via $nextHop ($hops hops)")
+        }
+        meshRoutingManager = MeshRoutingManager(
+            deviceSenderId,
+            current,
+            outboxDao = db.outboxDao(),
+            discovery = discoveryManager,
+            deliveryTracker = deliveryTracker
+        )
 
         current.startListening(
             onPacketReceived = { packet ->
@@ -141,6 +161,26 @@ class PipelineOrchestrator(
                 Log.i(TAG, "Transport state changed: $state")
             }
         )
+    }
+
+    /**
+     * Periodically advertise this node's presence + role on the network so that
+     * multi-hop discovery can build routing tables. Lightweight, no contact lists.
+     */
+    private fun startDiscoveryAdvertising() {
+        coroutineScope.launch {
+            val profile = com.itantra.identity.NodeIdentity.current()
+            while (isActive) {
+                val role = profile?.role ?: "DEFAULT"
+                val displayName = profile?.displayName ?: deviceSenderId
+                val hello = meshRoutingManager?.discovery?.buildHello(role, displayName)
+                val t = transport
+                if (hello != null && t != null && t.isConnected()) {
+                    t.sendPacket(hello)
+                }
+                delay(30_000)
+            }
+        }
     }
 
     // --- Session handshake (ECDH) -------------------------------------------
@@ -237,7 +277,9 @@ class PipelineOrchestrator(
                 val vadEvent = vadEngine.processChunk(chunk)
                 val isSpeech = vadEvent == VadEvent.SPEECH_START ||
                         vadEvent == VadEvent.SPEECH_CONTINUE ||
-                        vadEvent == VadEvent.PAUSE_DETECTED
+                        vadEvent == VadEvent.SHORT_PAUSE ||
+                        vadEvent == VadEvent.SENTENCE_END ||
+                        vadEvent == VadEvent.LONG_SILENCE
                 if (isSpeech) {
                     synchronized(speechAudioBuffer) {
                         for (sample in chunk) {
@@ -261,8 +303,12 @@ class PipelineOrchestrator(
                     }
                 }
 
-                // In Continuous mode: Auto finalize on sentence end pause
-                if (operatingMode == OperatingMode.CONTINUOUS && vadEvent == VadEvent.SENTENCE_END && speechAudioBuffer.isNotEmpty()) {
+                // In Continuous mode: Auto finalize on sentence end OR long silence
+                // (voice endpointing — pauses form sentences, long silence finalizes)
+                if (operatingMode == OperatingMode.CONTINUOUS &&
+                    (vadEvent == VadEvent.SENTENCE_END || vadEvent == VadEvent.LONG_SILENCE) &&
+                    speechAudioBuffer.isNotEmpty()
+                ) {
                     finalizeUtteranceAndSend()
                 }
             }
@@ -389,6 +435,7 @@ class PipelineOrchestrator(
             val tReceive = System.currentTimeMillis()
             _transceiverState.value = TransceiverState.RECEIVING
             _lastReceivedText.value = "[${packet.senderId}] " + packet.text
+            deliveryTracker.update(packet.messageId, com.itantra.transport.DeliveryStatus.PLAYING, packet.hopCount)
 
             // Switch TTS model to packet language if needed
             if (ttsEngine.synthesize("").languageCode != packet.language) {

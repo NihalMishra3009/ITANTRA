@@ -16,7 +16,35 @@ enum class PacketType {
     RELAY,       // Multi-hop forwarded packet
     SESSION_START,
     SESSION_END,
-    LANGUAGE_CHANGE
+    LANGUAGE_CHANGE,
+    NODE_HELLO,       // App-level discovery: this node's presence + role + capabilities
+    NODE_ANNOUNCE,    // Periodic network metadata advertisement
+    ROUTE_REQUEST,    // Ask peers for a route to a destination
+    ROUTE_RESPONSE,   // Reply with a known route
+    ROUTE_UPDATE,     // Distribute/refresh route table entries
+    LOCATION_UPDATE   // Share coarse node location
+}
+
+/** Destination addressing mode for iTantra. */
+enum class AddressMode {
+    INDIVIDUAL,   // direct to one Node ID, e.g. ITN-B91C
+    GROUP,        // broadcast to a role/group, e.g. RESCUE, MEDICAL
+    ZONE          // geographic/zone address, e.g. ZONE_07
+}
+
+/**
+ * Logical destination address. Resolution happens at the routing layer.
+ */
+data class Destination(
+    val mode: AddressMode,
+    val address: String   // node ID, group/role name, or zone/sector id
+) {
+    val isBroadcast: Boolean get() = address == "*"
+    override fun toString(): String = when (mode) {
+        AddressMode.INDIVIDUAL -> "node:$address"
+        AddressMode.GROUP -> "group:$address"
+        AddressMode.ZONE -> "zone:$address"
+    }
 }
 
 /**
@@ -31,6 +59,7 @@ data class TextPacket(
     val messageId: String = UUID.randomUUID().toString().substring(0, 8),
     val senderId: String,
     val recipientId: String = "*",
+    val addressMode: AddressMode = AddressMode.INDIVIDUAL,
     val type: PacketType = PacketType.DATA,
     val language: String,
     val sequence: Int = 0,
@@ -50,7 +79,11 @@ data class TextPacket(
         if (!MessageSecurityManager.hasSessionKey() && sessionKey == null) {
             throw SecurityException("No session key established — cannot encrypt")
         }
-        val cipher = MessageSecurityManager.encryptPayload(this.text, sessionKey)
+        // Bind the message identity (id + timestamp) as associated data so a
+        // replayed/duplicate ciphertext cannot be silently re-authenticated under
+        // a different context (replay protection).
+        val aad = replayAad()
+        val cipher = MessageSecurityManager.encryptPayload(this.text, sessionKey, aad)
         return this.copy(
             text = "",
             encryptedPayload = cipher,
@@ -60,13 +93,22 @@ data class TextPacket(
 
     fun withDecryption(sessionKey: ByteArray? = null): TextPacket {
         if (!isEncrypted || encryptedPayload.isBlank()) return this
-        val plain = MessageSecurityManager.decryptPayload(this.encryptedPayload, sessionKey)
+        val aad = replayAad()
+        val plain = MessageSecurityManager.decryptPayload(this.encryptedPayload, sessionKey, aad)
         return this.copy(text = plain)
+    }
+
+    /** AAD binds the message id + timestamp so ciphertext is context-bound. */
+    private fun replayAad(): ByteArray {
+        return "$messageId:$timestamp:$senderId:$recipientId".toByteArray(StandardCharsets.UTF_8)
     }
 
     fun isExpired(): Boolean {
         return (System.currentTimeMillis() - timestamp) > ttlMs
     }
+
+    /** True if this packet targets a group/role or zone, not a single node. */
+    val isGroupOrZone: Boolean get() = addressMode == AddressMode.GROUP || addressMode == AddressMode.ZONE
 
     fun createAckPacket(ackSenderId: String): TextPacket {
         return TextPacket(

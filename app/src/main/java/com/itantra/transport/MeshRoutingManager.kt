@@ -25,7 +25,9 @@ data class QueuedMessage(
 class MeshRoutingManager(
     val myNodeId: String,
     private val transportLayer: TransportLayer,
-    private val outboxDao: OutboxDao? = null
+    private val outboxDao: OutboxDao? = null,
+    val discovery: NetworkDiscoveryManager? = null,
+    val deliveryTracker: DeliveryTracker? = null
 ) {
     companion object {
         private const val TAG = "MeshRoutingManager"
@@ -92,6 +94,7 @@ class MeshRoutingManager(
     fun sendReliablePacket(packet: TextPacket, onAckReceived: ((Boolean) -> Unit)? = null) {
         val isEmergency = packet.type == PacketType.EMERGENCY || packet.isPriority
         val queued = QueuedMessage(packet = packet)
+        deliveryTracker?.track(packet, DeliveryStatus.QUEUED)
         if (isEmergency) {
             // Emergency: transmit immediately, preempt normal queue
             outboxQueue.addFirst(queued)
@@ -114,6 +117,7 @@ class MeshRoutingManager(
                             isAcknowledged = false
                         )
                     )
+                    deliveryTracker?.update(packet.messageId, DeliveryStatus.STORED)
                 } catch (e: Exception) {
                     Log.w(TAG, "Failed to persist outbox message", e)
                 }
@@ -178,18 +182,34 @@ class MeshRoutingManager(
                     try { dao.delete(targetMsgId) } catch (e: Exception) { /* ignore */ }
                 }
             }
+            deliveryTracker?.update(targetMsgId, DeliveryStatus.ACKNOWLEDGED)
             pendingAcks[targetMsgId]?.complete(true)
             return
         }
 
+        // 3b. Handle network-discovery / routing-control packets
+        if (packet.type == PacketType.NODE_HELLO ||
+            packet.type == PacketType.NODE_ANNOUNCE ||
+            packet.type == PacketType.ROUTE_REQUEST ||
+            packet.type == PacketType.ROUTE_RESPONSE ||
+            packet.type == PacketType.ROUTE_UPDATE ||
+            packet.type == PacketType.LOCATION_UPDATE
+        ) {
+            discovery?.onDiscoveryPacket(packet)
+            return
+        }
+
         // 4. Check Addressing: Am I the destination or broadcast?
-        val isForMe = packet.recipientId == "*" || packet.recipientId.equals(myNodeId, ignoreCase = true)
+        val isForMe = packet.recipientId == "*" ||
+                packet.recipientId.equals(myNodeId, ignoreCase = true) ||
+                packet.isGroupOrZone
 
         if (isForMe) {
             Log.i(TAG, "Packet ${packet.messageId} delivered locally to $myNodeId")
+            deliveryTracker?.track(packet, DeliveryStatus.DELIVERED, packet.hopCount)
             
             // Automatically send ACK back to sender if unicast
-            if (packet.recipientId != "*") {
+            if (packet.recipientId != "*" && !packet.isGroupOrZone) {
                 val ackPacket = packet.createAckPacket(myNodeId)
                 transportLayer.sendPacket(ackPacket)
                 Log.i(TAG, "Dispatched ACK back to ${packet.senderId} for ${packet.messageId}")
@@ -199,10 +219,13 @@ class MeshRoutingManager(
             val decryptedPacket = packet.withDecryption()
             onLocalDeliver(decryptedPacket)
         } else {
-            // 5. Multi-Hop Intermediate Relay Forwarding
+            // 5. Multi-Hop Intermediate Relay Forwarding (route-aware)
             if (packet.hopCount < packet.maxHops) {
+                // Try to use the routing table for a better next hop than blind relay.
+                val routeNextHop = discoverRoute(packet.recipientId)
                 val relayPacket = packet.createForwardedPacket()
-                Log.i(TAG, "Relaying packet ${packet.messageId} (hop ${relayPacket.hopCount}/${packet.maxHops}) to destination ${packet.recipientId}")
+                Log.i(TAG, "Relaying packet ${packet.messageId} (hop ${relayPacket.hopCount}/${packet.maxHops}) to destination ${packet.recipientId}" +
+                        (if (routeNextHop != null) " via $routeNextHop" else " (broadcast relay)"))
                 sendReliablePacket(relayPacket)
             } else {
                 Log.w(TAG, "Packet ${packet.messageId} dropped: Max hops (${packet.maxHops}) reached")
@@ -223,6 +246,9 @@ class MeshRoutingManager(
             val item = iterator.next()
 
             if (item.isAcknowledged || item.packet.isExpired()) {
+                if (item.packet.isExpired()) {
+                    deliveryTracker?.update(item.packet.messageId, DeliveryStatus.EXPIRED)
+                }
                 iterator.remove()
                 continue
             }
@@ -233,6 +259,7 @@ class MeshRoutingManager(
                     item.lastAttemptTimestamp = now
                     item.retryCount++
                     Log.i(TAG, "Transmitting queued packet ${item.packet.messageId} (Attempt ${item.retryCount}/${item.maxRetries})")
+                    deliveryTracker?.update(item.packet.messageId, DeliveryStatus.FORWARDING, item.packet.hopCount)
                     val sent = transportLayer.sendPacket(item.packet)
                     if (sent && item.packet.recipientId == "*") {
                         // Broadcast packets don't expect ACKs
@@ -269,6 +296,23 @@ class MeshRoutingManager(
     }
 
     fun getOutboxSize(): Int = outboxQueue.size
+
+    /**
+     * Look up a known route to a destination in the discovery routing table.
+     * Returns the next-hop node ID, or null if no route is known (blind relay).
+     */
+    private fun discoverRoute(destinationId: String): String? {
+        val d = discovery ?: return null
+        val route = d.routes[destinationId] ?: return null
+        if (route.expiryMs < System.currentTimeMillis()) {
+            d.routes.remove(destinationId)
+            return null
+        }
+        return route.nextHopId
+    }
+
+    /** Snapshot of the current outbox contents (for UI delivery visibility). */
+    fun getOutboxSnapshot(): List<QueuedMessage> = outboxQueue.toList()
 
     fun release() {
         workerJob?.cancel()

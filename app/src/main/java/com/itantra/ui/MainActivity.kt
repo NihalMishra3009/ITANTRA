@@ -96,6 +96,10 @@ class MainActivity : AppCompatActivity() {
         setupDeviceConnection()
         observeOrchestratorState()
 
+        binding.btnOpenNetwork.setOnClickListener {
+            startActivity(android.content.Intent(this, NetworkActivity::class.java))
+        }
+
         renderStatus(TransceiverState.IDLE)
 
         checkAndRequestPermissions()
@@ -123,6 +127,7 @@ class MainActivity : AppCompatActivity() {
             ttsEngine = ttsEngine,
             transport = currentTransport
         )
+        (application as com.itantra.iTantraApp).orchestrator = orchestrator
     }
 
     private fun setupLanguageSpinner() {

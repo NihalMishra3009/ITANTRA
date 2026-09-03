@@ -1,0 +1,183 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_black"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="20dp">
+
+        <!-- Header -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:letterSpacing="0.08"
+                android:text="NETWORK MAP &amp; DIAGNOSTICS"
+                android:textAllCaps="true"
+                android:textColor="@color/text_white"
+                android:textSize="16sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Live network topology, offline routing, and model capability"
+            android:textColor="@color/text_faint"
+            android:textSize="12sp" />
+
+        <!-- Node identity -->
+        <TextView
+            android:id="@+id/tvNodeId"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="14dp"
+            android:text="THIS NODE"
+            android:textColor="@color/comm_green"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <!-- Neighbors -->
+        <TextView
+            android:id="@+id/sectionNeighbors"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="18dp"
+            android:letterSpacing="0.05"
+            android:text="NEIGHBORS"
+            android:textColor="@color/comm_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <ScrollView
+            android:id="@+id/neighborsScroll"
+            android:layout_width="match_parent"
+            android:layout_height="200dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip">
+
+            <TextView
+                android:id="@+id/tvNeighbors"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:padding="12dp"
+                android:textColor="@color/text_white"
+                android:textSize="12sp"
+                android:text="No neighbors discovered yet" />
+        </ScrollView>
+
+        <!-- Routes -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.05"
+            android:text="ROUTING TABLE"
+            android:textColor="@color/comm_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvRoutes"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="12dp"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:text="No routes learned yet" />
+
+        <!-- Model capability -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.05"
+            android:text="MODEL CAPABILITY (VERIFIED)"
+            android:textColor="@color/comm_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvModels"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="12dp"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:text="Loading model registry…" />
+
+        <!-- Delivery status -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.05"
+            android:text="DELIVERY STATUS"
+            android:textColor="@color/comm_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvDelivery"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="12dp"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:text="No messages tracked" />
+
+        <!-- Performance -->
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:letterSpacing="0.05"
+            android:text="LATENCY / RTF"
+            android:textColor="@color/comm_green"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/tvPerf"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="12dp"
+            android:textColor="@color/text_white"
+            android:textSize="12sp"
+            android:text="No latency samples yet" />
+
+        <Button
+            android:id="@+id/btnRefresh"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="@color/bg_elevated"
+            android:text="REFRESH"
+            android:textColor="@color/comm_green"
+            android:textStyle="bold" />
+
+    </LinearLayout>
+</ScrollView>

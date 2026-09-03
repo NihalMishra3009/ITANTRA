@@ -221,4 +221,27 @@ object MessageSecurityManager {
         return sessionKeyBytes
             ?: throw IllegalStateException("No session key set — call setSessionKey() or pass explicit key")
     }
+
+    // --- Persistent node keypair (application identity, NodeIdentity) -------
+
+    /**
+     * Generate a persistent P-256 keypair for this node's stable application
+     * identity. Returns (publicKeyB64, privateKeyB64). Used by [NodeIdentity]
+     * to provision a long-lived identity independent of transport/MAC.
+     */
+    fun generatePersistentKeyPairBase64(): Pair<String, String> {
+        val gen = KeyPairGenerator.getInstance(CURVE)
+        gen.initialize(256)
+        val pair = gen.generateKeyPair()
+        return Base64Codec.encode(pair.public.encoded) to Base64Codec.encode(pair.private.encoded)
+    }
+
+    /**
+     * Reconstruct a PrivateKey from its raw PKCS#8 encoded bytes (persisted by
+     * NodeIdentity). Throws if the bytes are invalid.
+     */
+    fun decodePersistentPrivateKey(encoded: ByteArray): PrivateKey {
+        val kf = KeyFactory.getInstance(CURVE)
+        return kf.generatePrivate(java.security.spec.PKCS8EncodedKeySpec(encoded))
+    }
 }

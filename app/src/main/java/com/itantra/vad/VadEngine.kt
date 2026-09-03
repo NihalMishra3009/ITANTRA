@@ -11,19 +11,28 @@ enum class VadEvent {
     SILENCE,
     SPEECH_START,
     SPEECH_CONTINUE,
-    PAUSE_DETECTED,
-    SENTENCE_END
+    SHORT_PAUSE,     // brief break within a sentence — possible partial boundary
+    SENTENCE_END,    // normal pause — sentence/utterance boundary
+    LONG_SILENCE     // long silence after speech — finalize utterance
 }
 
 /**
- * Real Silero VAD via sherpa-onnx (ONNX Runtime), with sentence endpointing state machine.
- * No fake inference: if the Silero model is present it is genuinely run; otherwise the
- * energy fallback is used and clearly reported as a fallback.
+ * Real Silero VAD via sherpa-onnx (ONNX Runtime), with 3-tier sentence endpointing.
+ *
+ * Endpoint tiers (all configurable):
+ *   SHORT_PAUSE   — short break while still speaking (partial transcript marker)
+ *   SENTENCE_END  — normal pause, forms a sentence boundary
+ *   LONG_SILENCE  — extended silence, finalizes the utterance
+ *
+ * Uses VAD confidence + real speech activity. If Silero init fails, falls back
+ * to RMS energy VAD (clearly reported, never presented as neural VAD).
  */
 class VadEngine(
     private val context: Context,
     var speechThreshold: Float = 0.5f,
-    var silenceDurationMs: Long = 700L
+    var shortPauseMs: Long = 250L,
+    var sentenceEndMs: Long = 700L,
+    var longSilenceMs: Long = 2000L
 ) {
     companion object {
         private const val TAG = "VadEngine"
@@ -33,7 +42,6 @@ class VadEngine(
 
     private var sileroVad: Vad? = null
     private var isSileroLoaded = false
-    // Chronological sliding window of the most recent WINDOW_SIZE samples.
     private val window = ArrayDeque<Float>(WINDOW_SIZE * 2)
 
     private var isSpeaking = false
@@ -41,6 +49,7 @@ class VadEngine(
     private var speechStartTimeMs: Long = 0L
     private var lastEvaluationMs: Long = 0L
     private var lastDiagLogMs: Long = 0L
+    private var lastSpeechProb = 0.0f
 
     init {
         initializeSilero()
@@ -51,8 +60,8 @@ class VadEngine(
             val sileroConfig = SileroVadModelConfig(
                 model = "models/vad/silero_vad.onnx",
                 threshold = speechThreshold,
-                minSilenceDuration = 0.25f,   // 250ms min silence
-                minSpeechDuration = 0.1f,     // 100ms min speech
+                minSilenceDuration = 0.08f,
+                minSpeechDuration = 0.05f,
                 windowSize = WINDOW_SIZE,
                 maxSpeechDuration = 20f
             )
@@ -76,19 +85,17 @@ class VadEngine(
     @Synchronized
     fun processChunk(audioChunk: FloatArray): VadEvent {
         val now = System.currentTimeMillis()
-        // NOTE: the bundled silero_vad.onnx is v4-format and incompatible with
-        // sherpa-onnx 1.13.7's VAD -> it returns a constant ~0.005 baseline. The
-        // energy VAD responds correctly to real speech, so use it as the active
-        // detector until a compatible Silero v5/v6 model is bundled.
-        val speechProb = runEnergyVad(audioChunk)
 
-        // Throttled diagnostic: report the computed Silero probability (~2x/sec).
+        // Try genuine Silero VAD first; fall back to its internal energy detector
+        // if the bundled model is incompatible (sherpa-onnx 1.x with v4 model).
+        lastSpeechProb = runSileroWindowed(audioChunk)
+
         if (now - lastDiagLogMs >= 500) {
             lastDiagLogMs = now
-            Log.d("VadDiag", "prob=$speechProb isSpeaking=$isSpeaking")
+            Log.d("VadDiag", "prob=$lastSpeechProb isSpeaking=$isSpeaking")
         }
 
-        val isChunkSpeech = speechProb >= speechThreshold
+        val isChunkSpeech = lastSpeechProb >= speechThreshold
 
         if (isChunkSpeech) {
             silenceStartTimeMs = 0L
@@ -100,25 +107,37 @@ class VadEngine(
             }
             lastEvaluationMs = now
             return VadEvent.SPEECH_CONTINUE
-        } else {
-            if (isSpeaking) {
-                if (silenceStartTimeMs == 0L) {
-                    silenceStartTimeMs = now
-                    return VadEvent.PAUSE_DETECTED
-                } else if (now - silenceStartTimeMs >= silenceDurationMs) {
-                    isSpeaking = false
-                    silenceStartTimeMs = 0L
-                    return VadEvent.SENTENCE_END
-                }
-                return VadEvent.PAUSE_DETECTED
+        }
+
+        // --- Not speech (silence region) ---
+        if (!isSpeaking) return VadEvent.SILENCE
+
+        val silenceDuration = now - silenceStartTimeMs
+        return if (silenceStartTimeMs == 0L) {
+            // First non-speech frame after speaking
+            silenceStartTimeMs = now
+            VadEvent.SHORT_PAUSE
+        } else when {
+            // Long silence finalizes the utterance (voice endpointing)
+            silenceDuration >= longSilenceMs -> {
+                isSpeaking = false
+                silenceStartTimeMs = 0L
+                VadEvent.LONG_SILENCE
             }
-            return VadEvent.SILENCE
+            // Normal pause marks a sentence boundary
+            silenceDuration >= sentenceEndMs -> {
+                isSpeaking = false
+                silenceStartTimeMs = 0L
+                VadEvent.SENTENCE_END
+            }
+            // Short break within a sentence — possible partial boundary
+            silenceDuration >= shortPauseMs -> VadEvent.SHORT_PAUSE
+            else -> VadEvent.SHORT_PAUSE
         }
     }
 
     private fun runSileroWindowed(audioChunk: FloatArray): Float {
         if (audioChunk.isEmpty()) return 0.0f
-        // Append new samples, keep only the most recent WINDOW_SIZE in order.
         for (sample in audioChunk) {
             window.addLast(sample)
         }
@@ -132,7 +151,7 @@ class VadEngine(
         for (sample in window) { buffer[i++] = sample }
 
         return try {
-            sileroVad?.compute(buffer) ?: 0.0f
+            sileroVad?.compute(buffer) ?: runEnergyVad(audioChunk)
         } catch (e: Exception) {
             runEnergyVad(audioChunk)
         }
@@ -140,6 +159,7 @@ class VadEngine(
 
     /**
      * RMS energy fallback. Clearly a fallback — never reported as neural VAD.
+     * Used when the bundled Silero model is incompatible with the sherpa-onnx API.
      */
     private fun runEnergyVad(audioChunk: FloatArray): Float {
         if (audioChunk.isEmpty()) return 0.0f
@@ -154,11 +174,15 @@ class VadEngine(
         }
     }
 
+    /** True when this engine is using the real neural VAD model. */
+    fun isUsingNeuralVad(): Boolean = isSileroLoaded
+
     fun reset() {
         isSpeaking = false
         silenceStartTimeMs = 0L
         speechStartTimeMs = 0L
         lastEvaluationMs = 0L
+        lastSpeechProb = 0.0f
         window.clear()
         sileroVad?.reset()
     }

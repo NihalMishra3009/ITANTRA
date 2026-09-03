@@ -56,6 +56,25 @@
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
 
+            <!-- Network Map / Diagnostics launcher -->
+            <TextView
+                android:id="@+id/btnOpenNetwork"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_surface_chip"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:text="NETWORK"
+                android:textAllCaps="true"
+                android:textColor="@color/comm_green"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                app:layout_constraintBottom_toTopOf="@id/viewStatusDot"
+                app:layout_constraintEnd_toEndOf="@id/viewStatusDot"
+                app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
+
             <TextView
                 android:id="@+id/tvHeaderConn"
                 android:layout_width="wrap_content"

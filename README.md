@@ -61,8 +61,8 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
 
 - **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
 - **10 Indian Languages Supported**: Hindi (`hi`), Marathi (`mr`), Bengali (`bn`, TTS), Gujarati (`gu`), Odia (`or`), Tamil (`ta`), Telugu (`te`), Kannada (`kn`), Malayalam (`ml`), English (`en`).
-  - **STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages.
-  - **TTS**: per-language **VITS ONNX** models via sherpa-onnx.
+  - **STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
+  - **TTS**: per-language **VITS ONNX** models via sherpa-onnx. **Currently only Bengali (`vits_bn`) is bundled**; the other 9 languages report TTS unavailable honestly. The architecture loads any `models/tts/vits_<lang>/` present.
 - **Real Model Inference (ONNX Runtime)**:
   - **VAD**: Silero VAD (v5/v6 compatible via sherpa-onnx).
   - **STT**: OpenAI Whisper base int8 (encoder + decoder ONNX).
@@ -72,11 +72,14 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
   - **AEAD AES-256-GCM** per-payload (confidentiality + integrity + authentication + replay protection).
   - **ECDH P-256** ephemeral key agreement + **HKDF-SHA256** to derive a shared session key between two phones.
   - No hard-coded secrets.
-- **Compact Binary Protocol**: `BinaryPacketCodec` replaces JSON on the wire (28-byte header + HMAC-SHA256 auth) — dramatically smaller than the JSON equivalent, ideal for low-bitrate links.
+- **Compact Binary Protocol**: `BinaryPacketCodec` (v3) replaces JSON on the wire — sender/recipient node IDs + HMAC-SHA256 auth, dramatically smaller than JSON, ideal for low-bitrate links.
 - **Persistent Store-and-Forward**: messages persist in a **Room outbox** that survives app restart; ACK, exponential-backoff retry, duplicate suppression, TTL, multi-hop relay, and emergency priority (emergency bypasses the normal queue).
 - **Dual Radio Transports**: Bluetooth Classic RFCOMM (with full in-range discovery incl. unpaired devices + auto-bonding) and Wi-Fi Direct P2P TCP (with real group-owner IP resolution).
-- **Walkie-Talkie & SOS Modes**: Push-To-Talk (PTT), Continuous hands-free, and High-Priority Emergency SOS with audio-focus override.
+- **Walking-Talkie & SOS Modes**: Push-To-Talk (PTT), Continuous hands-free, and High-Priority Emergency SOS with audio-focus override.
 - **Real Benchmarking**: monotonic-clock latency capture (STT / transport / TTS / E2E / RTF) and measured binary-vs-JSON packet size.
+- **DTN Network Layer**: application-level `ITN-XXXXXX` node identity (transport-independent), neighbor discovery (NODE_HELLO/NODE_ANNOUNCE), a real routing table with cost-based next-hop selection (ROUTE_REQUEST/RESPONSE/UPDATE), multi-neighbor relay, and store-carry-forward delivery tracked by a `DeliveryTracker` (QUEUED→STORED→FORWARDING→DELIVERED→ACKNOWLEDGED).
+- **Offline Location & Privacy**: `LocationManager` uses GNSS/Wi-Fi-RTT/BLE-RSSI/relay-anchor sources (never GPS-only), never fabricates coordinates, and advertises coarse, expiry-limited, privacy-preserving positions.
+- **Network Map & Diagnostics**: `NetworkActivity` shows live node identity, neighbors, routing table, verified model capability, delivery status, and latency — all driven by real backend state, no fake nodes.
 
 ---
 

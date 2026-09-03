@@ -91,8 +91,8 @@ class TextPacketTest {
         val text = "मुझे सहायता चाहिए"  // 20+ UTF-8 bytes in Hindi
         val packet = TextPacket(
             messageId = "abc12345",
-            senderId = "NODE_A",
-            recipientId = "NODE_B",
+            senderId = "ITN-AAAA11",
+            recipientId = "ITN-B91C",
             type = PacketType.DATA,
             language = "hi",
             sequence = 77,
@@ -108,6 +108,9 @@ class TextPacketTest {
         assertEquals("hi", decoded.language)
         assertEquals(77, decoded.sequence)
         assertEquals(text, decoded.text)
+        // VERSION 3 must preserve sender/recipient for multi-hop routing
+        assertEquals("ITN-AAAA11", decoded.senderId)
+        assertEquals("ITN-B91C", decoded.recipientId)
     }
 
     @Test
