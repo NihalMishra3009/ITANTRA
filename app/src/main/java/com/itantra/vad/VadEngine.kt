@@ -33,14 +33,14 @@ class VadEngine(
 
     private var sileroVad: Vad? = null
     private var isSileroLoaded = false
-    private var ringBuffer = FloatArray(WINDOW_SIZE)
-    private var ringIndex = 0
-    private var ringFilled = false
+    // Chronological sliding window of the most recent WINDOW_SIZE samples.
+    private val window = ArrayDeque<Float>(WINDOW_SIZE * 2)
 
     private var isSpeaking = false
     private var silenceStartTimeMs: Long = 0L
     private var speechStartTimeMs: Long = 0L
     private var lastEvaluationMs: Long = 0L
+    private var lastDiagLogMs: Long = 0L
 
     init {
         initializeSilero()
@@ -76,10 +76,16 @@ class VadEngine(
     @Synchronized
     fun processChunk(audioChunk: FloatArray): VadEvent {
         val now = System.currentTimeMillis()
-        val speechProb = if (isSileroLoaded && sileroVad != null) {
-            runSileroWindowed(audioChunk)
-        } else {
-            runEnergyVad(audioChunk)
+        // NOTE: the bundled silero_vad.onnx is v4-format and incompatible with
+        // sherpa-onnx 1.13.7's VAD -> it returns a constant ~0.005 baseline. The
+        // energy VAD responds correctly to real speech, so use it as the active
+        // detector until a compatible Silero v5/v6 model is bundled.
+        val speechProb = runEnergyVad(audioChunk)
+
+        // Throttled diagnostic: report the computed Silero probability (~2x/sec).
+        if (now - lastDiagLogMs >= 500) {
+            lastDiagLogMs = now
+            Log.d("VadDiag", "prob=$speechProb isSpeaking=$isSpeaking")
         }
 
         val isChunkSpeech = speechProb >= speechThreshold
@@ -112,14 +118,21 @@ class VadEngine(
 
     private fun runSileroWindowed(audioChunk: FloatArray): Float {
         if (audioChunk.isEmpty()) return 0.0f
+        // Append new samples, keep only the most recent WINDOW_SIZE in order.
         for (sample in audioChunk) {
-            ringBuffer[ringIndex] = sample
-            ringIndex = (ringIndex + 1) % WINDOW_SIZE
-            if (ringIndex == 0) ringFilled = true
+            window.addLast(sample)
         }
-        if (!ringFilled) return 0.0f
+        while (window.size > WINDOW_SIZE) {
+            window.removeFirst()
+        }
+        if (window.size < WINDOW_SIZE) return 0.0f
+
+        val buffer = FloatArray(WINDOW_SIZE)
+        var i = 0
+        for (sample in window) { buffer[i++] = sample }
+
         return try {
-            sileroVad?.compute(ringBuffer) ?: 0.0f
+            sileroVad?.compute(buffer) ?: 0.0f
         } catch (e: Exception) {
             runEnergyVad(audioChunk)
         }
@@ -146,9 +159,7 @@ class VadEngine(
         silenceStartTimeMs = 0L
         speechStartTimeMs = 0L
         lastEvaluationMs = 0L
-        ringBuffer = FloatArray(WINDOW_SIZE)
-        ringIndex = 0
-        ringFilled = false
+        window.clear()
         sileroVad?.reset()
     }
 

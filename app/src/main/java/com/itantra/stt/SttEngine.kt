@@ -134,7 +134,10 @@ class SttEngine(
                 blankPenalty = 0.0f
             )
 
-            recognizer = OfflineRecognizer(assetManager = context.assets, config = config)
+            recognizer = OfflineRecognizer(
+                assetManager = null, // absolute filesystem paths -> assetManager must be null
+                config = config
+            )
             hasRealModel = true
             modelManager.markLoaded(
                 ModelType.STT, lang.code,

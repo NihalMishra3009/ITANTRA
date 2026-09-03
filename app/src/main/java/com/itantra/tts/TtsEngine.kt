@@ -50,11 +50,22 @@ class TtsEngine(
         hasRealModel = false
 
         val modelAssetDir = "models/tts/vits_${lang.code}"
+        val modelPath = "$modelAssetDir/model.onnx"
+        val tokensPath = "$modelAssetDir/tokens.txt"
+
+        // Critical: check the model assets exist BEFORE constructing OfflineTts.
+        // sherpa-onnx aborts (native SIGABRT, uncatchable) if a model file is missing.
+        if (!assetExists(modelPath) || !assetExists(tokensPath)) {
+            Log.w(TAG, "No genuine TTS model for ${lang.displayName} (missing $modelPath) — TTS unavailable")
+            isInitialized = true
+            return true
+        }
+
         return try {
             val model = OfflineTtsVitsModelConfig(
-                model = "$modelAssetDir/model.onnx",
+                model = modelPath,
                 lexicon = "",
-                tokens = "$modelAssetDir/tokens.txt",
+                tokens = tokensPath,
                 dataDir = "",
                 dictDir = "",
                 noiseScale = 0.667f,
@@ -92,6 +103,14 @@ class TtsEngine(
             true
         } finally {
             isInitialized = true
+        }
+    }
+
+    private fun assetExists(assetPath: String): Boolean {
+        return try {
+            context.assets.open(assetPath).use { it.available() >= 0 } // true if open succeeds
+        } catch (e: Exception) {
+            false
         }
     }
 

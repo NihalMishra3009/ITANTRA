@@ -333,20 +333,26 @@ class PipelineOrchestrator(
             _transceiverState.value = TransceiverState.PLAYING
             var tPlayStart = System.currentTimeMillis()
 
-            audioFocusManager.requestFocus(packet.isAlert)
-            try {
-                audioPlayer.playPcm(
-                    pcmData = ttsResult.pcmAudio,
-                    sampleRate = ttsResult.sampleRate,
-                    isAlert = packet.isAlert,
-                    onPlaybackStarted = {
-                        tPlayStart = System.currentTimeMillis()
-                    }
-                )
-            } finally {
-                audioFocusManager.abandonFocus()
-                _transceiverState.value = TransceiverState.IDLE
+            if (ttsResult.pcmAudio.isEmpty()) {
+                Log.w(TAG, "TTS produced empty audio for '${packet.language}' — speech playback cannot start. " +
+                        "No genuine TTS model available for this language.")
+                tPlayStart = System.currentTimeMillis()
+            } else {
+                audioFocusManager.requestFocus(packet.isAlert)
+                try {
+                    audioPlayer.playPcm(
+                        pcmData = ttsResult.pcmAudio,
+                        sampleRate = ttsResult.sampleRate,
+                        isAlert = packet.isAlert,
+                        onPlaybackStarted = {
+                            tPlayStart = System.currentTimeMillis()
+                        }
+                    )
+                } finally {
+                    audioFocusManager.abandonFocus()
+                }
             }
+            _transceiverState.value = TransceiverState.IDLE
 
             // Telemetry & Benchmark logging
             val speechStart = if (tSpeechStart > 0) tSpeechStart else packet.timestamp - 1500
