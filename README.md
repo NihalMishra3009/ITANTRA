@@ -3,61 +3,80 @@
 
 [![Android Build](https://img.shields.io/badge/Android-Gradle%20Build%20PASS-brightgreen.svg)]()
 [![Inference](https://img.shields.io/badge/On--Device-100%25%20Offline-blue.svg)]()
-[![Models](https://img.shields.io/badge/AI4Bharat-IndicConformer%20%26%20Indic--TTS-purple.svg)]()
-[![Security](https://img.shields.io/badge/Payload-AES%20Encrypted-red.svg)]()
-[![Routing](https://img.shields.io/badge/Mesh-Store%20%26%20Forward-teal.svg)]()
+[![STT](https://img.shields.io/badge/STT-Whisper%20base%20int8-purple.svg)]()
+[![TTS](https://img.shields.io/badge/TTS-VITS%20ONNX-purple.svg)]()
+[![VAD](https://img.shields.io/badge/VAD-Silero-blue.svg)]()
+[![Security](https://img.shields.io/badge/Payload-AES--256--GCM%20%2B%20ECDH-red.svg)]()
+[![Protocol](https://img.shields.io/badge/Protocol-Compact%20Binary-teal.svg)]()
 [![Languages](https://img.shields.io/badge/Languages-10%20Indian%20Languages-orange.svg)]()
-[![License](https://img.shields.io/badge/License-MIT%20%2F%20CC--BY%204.0-green.svg)]()
+[![License](https://img.shields.io/badge/License-MIT%20%2F%20Apache%202.0-green.svg)]()
 
-**iTantra** is a fully offline, peer-to-peer multilingual neural transceiver engineered for disaster response teams, deep-space simulation habitats, remote field expeditions, and cellular/satellite-denied environments. It captures audio from the microphone, applies on-device Voice Activity Detection (VAD) and **AI4Bharat IndicConformer Speech-to-Text (STT)**, applies **AI4Bharat Unicode text normalization**, encrypts the payload via **AES-128/256-CBC**, transmits structured packets over **Bluetooth RFCOMM / Wi-Fi Direct Mesh Sockets**, and synthesizes speech on receiver devices using **AI4Bharat Indic-TTS**.
+**iTantra** is a fully offline, peer-to-peer multilingual neural transceiver engineered for disaster response teams, deep-space simulation habitats, remote field expeditions, and cellular/satellite-denied environments. It captures audio from the microphone, applies on-device Voice Activity Detection (VAD) and **OpenAI Whisper multilingual Speech-to-Text (STT) via sherpa-onnx / ONNX Runtime**, encrypts the payload with **AEAD AES-256-GCM** derived from an **ECDH P-256 session handshake**, transmits compact binary packets over **Bluetooth RFCOMM / Wi-Fi Direct** with a **persistent Room store-and-forward outbox**, and synthesizes speech on receiver devices using **VITS neural Text-to-Speech**.
+
+All model assets run locally via ONNX Runtime — **no cloud APIs, no internet**.
 
 ---
 
 ## 🌟 Core Architecture & Pipeline
 
 ```text
-USER SPEAKS (or manual text fallback)
+USER SPEAKS
       ↓
-MICROPHONE (16kHz 16-bit Mono PCM)
+MICROPHONE (16kHz 16-bit Mono PCM, 32ms chunks)
       ↓
-SILERO VAD / ENERGY PAUSE DETECTOR
+SILERO VAD (sherpa-onnx / ONNX Runtime) + sentence endpointing
       ↓
-AI4BHARAT INDICCONFORMER STT ENGINE (Acoustic CTC Decoding)
+OPENAI WHISPER base int8 MULTILINGUAL STT (all 10 languages, ONNX)
       ↓
-AI4BHARAT INDICTEXTNORMALIZER (Unicode NFC, Danda, Nukta Cleanup)
+INDICTEXTNORMALIZER (Unicode NFC, Indic punctuation cleanup)
       ↓
-MESSAGESECURITYMANAGER (AES Payload Encryption)
+STREAMING PARTIAL + SENTENCE ENDPOINTING
       ↓
-OFFLINE RADIO TRANSPORT (Bluetooth RFCOMM / Wi-Fi Direct Mesh Sockets)
-      ↓ (Multi-Hop Intermediate Forwarding & Store-and-Forward Outbox Queue)
+MESSAGESECURITYMANAGER (AEAD AES-256-GCM, ECDH P-256 session handshake)
+      ↓
+COMPACT BINARY PACKET (BinaryPacketCodec: 28B header + HMAC-SHA256 auth)
+      ↓
+OFFLINE RADIO TRANSPORT (Bluetooth RFCOMM / Wi-Fi Direct — real group-owner IP)
+      ↓  (Persistent Room outbox, ACK, retry, emergency priority, multi-hop relay)
 RECEIVER DESTINATION NODE
       ↓
-MESSAGESECURITYMANAGER (AES Payload Decryption)
+MESSAGESECURITYMANAGER (AEAD decryption)
       ↓
-AI4BHARAT INDIC-TTS ENGINE (22.05kHz PCM Waveform Synthesis)
+VITS NEURAL TTS (ONNX via sherpa-onnx OfflineTts)
       ↓
-SPEAKER AUDIO PLAYBACK (STREAM_MUSIC or High-Priority STREAM_ALARM SOS Siren)
+SPEAKER AUDIO PLAYBACK (AudioTrack; alert uses alarm stream + audio focus)
 ```
+
+### Latency / Low-Bitrate Path
+
+```text
+SPEECH → TEXT → COMPACT PACKET → WIRELESS LINK → TEXT → TTS → SPEECH
+```
+
+Audio is never transmitted. Only the compact UTF-8 text packet travels over the air; the receiver re-synthesizes speech locally.
 
 ---
 
 ## 🚀 Key Features
 
-- **100% Offline Operation**: Zero cloud STT/TTS APIs, zero telemetry tracking, zero internet connectivity required.
-- **10 Indian Languages Supported**: Hindi (`hi`), Marathi (`mr`), Bengali (`bn`), Gujarati (`gu`), Odia (`or`), Tamil (`ta`), Telugu (`te`), Kannada (`kn`), Malayalam (`ml`), English (`en`).
-- **AI4Bharat Indic Model Suite**:
-  - **STT**: AI4Bharat IndicConformer hybrid acoustic CTC speech recognition.
-  - **TTS**: AI4Bharat Indic-TTS 22.05kHz PCM synthesis with emergency SOS siren chime generation.
-  - **Normalization**: AI4Bharat IndicTextNormalizer for Unicode NFC composition, Indic punctuation standardization, and script preservation.
-- **End-to-End Payload Security**: Plain text transcribed speech is encrypted with AES-128/256-CBC and signed with HMAC-SHA256 checksums before transmission. Intermediate mesh relay nodes forward encrypted packets blindly without exposing conversations.
-- **Resilient Mesh & Store-and-Forward**:
-  - Unicast Acknowledgements (ACK) & exponential backoff retries.
-  - Multi-hop intermediate relay forwarding (configurable TTL / hop count).
-  - Outbox buffer queue saves messages when downstream nodes are disconnected and auto-flushes upon link restoration.
-  - Monotonic sliding window deduplication suppresses broadcast storms.
-- **Dual Radio Transports**: Bluetooth Classic RFCOMM SPP and Wi-Fi Direct P2P TCP socket with 4-byte length-delimited atomic framing.
-- **Walkie-Talkie & SOS Modes**: Push-To-Talk (PTT), Continuous hands-free transceiver, and High-Priority SOS Emergency Override with siren chime.
-- **Manual Text Typing Fallback**: Transmit direct encrypted text messages when speech input or STT is disabled.
+- **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
+- **10 Indian Languages Supported**: Hindi (`hi`), Marathi (`mr`), Bengali (`bn`, TTS), Gujarati (`gu`), Odia (`or`), Tamil (`ta`), Telugu (`te`), Kannada (`kn`), Malayalam (`ml`), English (`en`).
+  - **STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages.
+  - **TTS**: per-language **VITS ONNX** models via sherpa-onnx.
+- **Real Model Inference (ONNX Runtime)**:
+  - **VAD**: Silero VAD (v5/v6 compatible via sherpa-onnx).
+  - **STT**: OpenAI Whisper base int8 (encoder + decoder ONNX).
+  - **TTS**: VITS neural models (per-language `model.onnx` + `tokens.txt`).
+  - No fake/placeholder models; every `.onnx` is a genuine trained binary.
+- **Modern Transport Security**:
+  - **AEAD AES-256-GCM** per-payload (confidentiality + integrity + authentication + replay protection).
+  - **ECDH P-256** ephemeral key agreement + **HKDF-SHA256** to derive a shared session key between two phones.
+  - No hard-coded secrets.
+- **Compact Binary Protocol**: `BinaryPacketCodec` replaces JSON on the wire (28-byte header + HMAC-SHA256 auth) — dramatically smaller than the JSON equivalent, ideal for low-bitrate links.
+- **Persistent Store-and-Forward**: messages persist in a **Room outbox** that survives app restart; ACK, exponential-backoff retry, duplicate suppression, TTL, multi-hop relay, and emergency priority (emergency bypasses the normal queue).
+- **Dual Radio Transports**: Bluetooth Classic RFCOMM (with full in-range discovery incl. unpaired devices + auto-bonding) and Wi-Fi Direct P2P TCP (with real group-owner IP resolution).
+- **Walkie-Talkie & SOS Modes**: Push-To-Talk (PTT), Continuous hands-free, and High-Priority Emergency SOS with audio-focus override.
+- **Real Benchmarking**: monotonic-clock latency capture (STT / transport / TTS / E2E / RTF) and measured binary-vs-JSON packet size.
 
 ---
 
@@ -66,54 +85,56 @@ SPEAKER AUDIO PLAYBACK (STREAM_MUSIC or High-Priority STREAM_ALARM SOS Siren)
 ```text
 iTantra/
 ├── app/
+│   ├── libs/
+│   │   └── sherpa-onnx-1.13.7.aar        # sherpa-onnx native runtime (ONNX, ASR, TTS, VAD) via LFS
 │   ├── src/main/
 │   │   ├── java/com/itantra/
 │   │   │   ├── ai4bharat/        # IndicTextNormalizer, LanguageManager, Ai4BharatModelManager, Adapters
-│   │   │   ├── security/         # MessageSecurityManager (AES Encryption & Decryption)
+│   │   │   ├── security/         # MessageSecurityManager (AEAD AES-256-GCM, ECDH P-256, HKDF), Base64Codec
 │   │   │   ├── audio/            # AudioRecorder, AudioPlayer, AudioFocusManager
-│   │   │   ├── vad/              # VadEngine (Silero VAD v5 ONNX + Energy VAD fallback)
-│   │   │   ├── stt/              # SttEngine (AI4Bharat IndicConformer CTC Decoder)
-│   │   │   ├── tts/              # TtsEngine (AI4Bharat Indic-TTS Formant Vocoder)
-│   │   │   ├── transport/        # MeshRoutingManager, BluetoothTransport, WifiDirectTransport
-│   │   │   ├── protocol/         # TextPacket V2 Protocol (Encryption, Checksums, ACKs, Hops)
-│   │   │   ├── orchestrator/     # PipelineOrchestrator (State machine, PTT, Continuous, SOS)
-│   │   │   ├── benchmark/        # BenchmarkLogger & metrics
-│   │   │   └── ui/               # MainActivity UI & Transceiver Controls
-│   │   ├── assets/models/        # Bundled ONNX, TFLite models, & JSON vocabularies
-│   │   └── res/                  # Layouts, themes, colors, launcher drawables
+│   │   │   ├── vad/              # VadEngine (Silero VAD via sherpa-onnx + energy fallback)
+│   │   │   ├── stt/              # SttEngine (Whisper base int8 multilingual via sherpa-onnx)
+│   │   │   ├── tts/              # TtsEngine (VITS ONNX via sherpa-onnx OfflineTts)
+│   │   │   ├── transport/        # MeshRoutingManager, OutboxDatabase (Room), BluetoothTransport, WifiDirectTransport
+│   │   │   ├── protocol/         # TextPacket + BinaryPacketCodec (compact binary wire format)
+│   │   │   ├── orchestrator/     # PipelineOrchestrator (state machine, PTT, Continuous, SOS, streaming STT)
+│   │   │   ├── benchmark/        # BenchmarkLogger & metrics (latency / RTF / packet size)
+│   │   │   └── ui/               # MainActivity (premium emergency-communication UI)
+│   │   ├── assets/models/        # Genuine ONNX models: Whisper base, Silero VAD, VITS-TTS (via LFS)
+│   │   └── res/                  # Layouts, themes, colors, drawables
 │   └── build.gradle.kts
 │
-├── benchmark/                    # Comprehensive Verification & Benchmarking Suite
-│   ├── verify_ai4bharat_complete.py   # Full 15-Point AI4Bharat validation & audit
-│   ├── test_ai4bharat_integration.py  # 8-Test end-to-end AI4Bharat integration suite
-│   ├── test_mesh_routing.py           # Multi-node network partition & store-and-forward test
+├── benchmark/                    # Verification & Benchmarking Suite
+│   ├── verify_ai4bharat_complete.py   # model / pipeline validation & audit
+│   ├── test_ai4bharat_integration.py  # end-to-end integration
+│   ├── test_mesh_routing.py           # multi-node store-and-forward test
 │   ├── evaluate_wer.py                # Word Error Rate (WER) benchmark
-│   ├── evaluate_latency.py            # Latency benchmark per stage
-│   └── evaluate_efficiency.py         # Memory, CPU, and APK footprint benchmark
+│   ├── evaluate_latency.py            # per-stage latency benchmark
+│   └── evaluate_efficiency.py         # memory / CPU / APK footprint
 │
 ├── docs/                         # Technical Architecture & Verification Documentation
-│   ├── AI4BHARAT_INTEGRATION.md       # AI4Bharat models, licenses, and architecture audit
-│   ├── COMMUNICATION_VERIFICATION.md  # 9-Point physical radio & mesh routing checklist audit
-│   ├── ARCHITECTURE.md                # System design & module breakdown
-│   ├── MODEL_LICENSES.md              # Open-source licenses (MIT / CC-BY 4.0 / Apache 2.0)
-│   ├── OFFLINE_VERIFICATION.md        # Airplane-mode & zero-network proof
-│   ├── ACCURACY_RESULTS.md            # WER & CER accuracy metrics
-│   ├── EFFICIENCY_RESULTS.md          # RAM, CPU, and battery benchmarks
-│   ├── LATENCY_RESULTS.md             # End-to-end transceiver latency breakdown
-│   ├── DEMO_GUIDE.md                  # Step-by-step judge & user demo walkthrough
-│   └── LIMITATIONS.md                 # Physical boundaries & hardware reality constraints
+│   ├── ARCHITECTURE.md                # system design & module breakdown
+│   ├── MODEL_LICENSES.md              # open-source licenses (MIT / Apache 2.0)
+│   ├── OFFLINE_VERIFICATION.md        # airplane-mode & zero-network proof
+│   ├── ACCURACY_RESULTS.md            # WER / CER accuracy metrics
+│   ├── EFFICIENCY_RESULTS.md          # RAM, CPU, battery benchmarks
+│   ├── LATENCY_RESULTS.md             # end-to-end latency breakdown
+│   ├── DEMO_GUIDE.md                  # step-by-step demo walkthrough
+│   └── LIMITATIONS.md                 # physical boundaries & model-availability constraints
 │
 └── README.md
 ```
+
+> **Model assets** (Whisper base `.onnx`, Silero `.onnx`, VITS `.onnx`, `sherpa-onnx .aar`) are stored via **Git LFS**. After cloning run `git lfs pull` to fetch the real binaries.
 
 ---
 
 ## 🛠️ Building & Installing the App
 
 ### Prerequisites
-- Android Studio Iguana / Ladybug or Android SDK CLI (API 24 to API 34)
-- JDK 17 or JDK 21
-- Python 3.8+ (for running automated benchmark verification suites)
+- Android Studio (API 24 to API 34) + Android SDK, JDK 17+
+- `git-lfs` installed (`git lfs pull` after clone to fetch model binaries)
+- Python 3.8+ (only for `benchmark/` suites)
 
 ### 1. Run JVM Unit Tests
 ```powershell
@@ -124,10 +145,9 @@ iTantra/
 ```powershell
 .\gradlew.bat assembleDebug
 ```
-The compiled APK will be generated at:
-`app/build/outputs/apk/debug/app-debug.apk`
+APK output: `app/build/outputs/apk/debug/app-debug.apk`
 
-### 3. Install to Connected Android Device via ADB
+### 3. Install & Launch
 ```powershell
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell am start -n com.itantra/.ui.MainActivity
@@ -137,43 +157,49 @@ adb shell am start -n com.itantra/.ui.MainActivity
 
 ## 🧪 Automated Benchmarking & Verification Suite
 
-Execute the standalone verification test suites:
-
 ```powershell
-# 1. Full 15-Point AI4Bharat Model Verification Suite
+# Model / pipeline validation
 python benchmark/verify_ai4bharat_complete.py
 
-# 2. End-to-End AI4Bharat Encryption & Transceiver Test
+# End-to-end encryption + transceiver test
 python benchmark/test_ai4bharat_integration.py
 
-# 3. Multi-Node Mesh & Store-and-Forward Partition Test
+# Multi-node mesh & store-and-forward partition test
 python benchmark/test_mesh_routing.py
 
-# 4. Accuracy & Latency Benchmarks
+# Accuracy & latency benchmarks
 python benchmark/evaluate_wer.py
 python benchmark/evaluate_latency.py
 python benchmark/evaluate_efficiency.py
 ```
 
+### On-Device Verification
+Run `adb logcat -s WhisperSttEngine TtsEngine VadEngine iTantraBenchmark` to observe real-time:
+- STT latency / RTF, transport latency, TTS latency, E2E latency
+- Binary vs JSON packet size per transmitted message
+
 ---
 
-## 📊 Measured Benchmark Results
+## 📊 Benchmarking
 
-| Metric | Target / Requirement | Measured Performance | Status |
-|---|---|---|---|
-| **STT Latency (Hindi)** | < 350ms | **82.4 ms** | ✅ PASS |
-| **TTS Latency (Hindi)** | < 400ms | **98.2 ms** | ✅ PASS |
-| **End-to-End Latency** | < 1200ms | **428.0 ms** | ✅ PASS |
-| **Word Error Rate (WER)** | < 15.0% | **8.4% (Hindi) / 9.6% (Marathi)** | ✅ PASS |
-| **Peak RAM Consumption** | < 250 MB | **142 MB** | ✅ PASS |
-| **CPU Utilization** | < 35% | **14% (Snapdragon 865)** | ✅ PASS |
-| **Model Footprint** | Low/Mid-range target | **2.3MB VAD + Int8 Quantized TFLite** | ✅ PASS |
-| **Internet Dependency** | 0 external calls | **100% Offline (Zero cloud APIs)** | ✅ PASS |
+The app captures **real monotonic-clock measurements** at each pipeline stage:
+
+| Metric | Source |
+|---|---|
+| STT latency & RTF | `BenchmarkLogger.logInteraction` (t2→t3) |
+| Transport latency | packet transmit→receive (t5→t6) |
+| TTS latency | text→first PCM (t7→t8) |
+| End-to-end (E2E) | speech start→playback start (t0→t9) |
+| Packet size | `BinaryPacketCodec` bytes vs equivalent JSON (`logPacketSize`) |
+
+Values are best read live on a target device via logcat or the Diagnostics UI rather than as hard-coded claims.
 
 ---
 
 ## 📜 Licenses & Attribution
 
-- **AI4Bharat IndicConformer & Indic-TTS**: Released by AI4Bharat, IIT Madras under [MIT & CC-BY 4.0](https://github.com/AI4Bharat).
-- **Silero VAD**: Released by Snakers4 under [MIT License](https://github.com/snakers4/silero-vad).
-- **iTantra Source Code**: Released under the **MIT License**.
+- **OpenAI Whisper**: [MIT License](https://github.com/openai/whisper/blob/main/LICENSE).
+- **sherpa-onnx** (inference runtime): [Apache 2.0](https://github.com/k2-fsa/sherpa-onnx).
+- **Silero VAD**: [MIT License](https://github.com/snakers4/silero-vad).
+- **VITS TTS**: [MIT License](https://github.com/jaywalnut310/vits).
+- **iTantra Source Code**: **MIT License**.
