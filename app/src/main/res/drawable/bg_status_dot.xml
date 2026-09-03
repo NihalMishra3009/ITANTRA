@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Simple status dot used for connection indicator (replaces launcher icon misuse). -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="oval">
+    <solid android:color="@color/comm_amber" />
+    <size android:width="12dp" android:height="12dp" />
+</shape>

@@ -1,15 +1,48 @@
 <resources>
     <string name="app_name">iTantra</string>
     <string name="tagline">Offline Multilingual Neural Transceiver (ISRO PS 26173)</string>
+    <string name="app_subtitle">Offline Neural Transceiver</string>
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connected">Connected</string>
     <string name="status_listening">Listening (VAD Active)…</string>
     <string name="status_transcribing">Transcribing (STT)…</string>
     <string name="status_synthesizing">Synthesizing (TTS)…</string>
     <string name="status_transmitting">Transmitting Packet…</string>
-    <string name="ptt_hold_to_talk">HOLD TO TALK</string>
+    <string name="ptt_hold_to_talk">PRESS TO TALK</string>
     <string name="ptt_release_to_send">RELEASE TO SEND</string>
     <string name="alert_mode_btn">ALERT / SOS</string>
     <string name="mode_ptt">Push-To-Talk (PTT)</string>
     <string name="mode_continuous">Continuous Conversation</string>
+
+    <!-- New UI strings -->
+    <string name="emergency_sos">EMERGENCY SOS</string>
+    <string name="your_voice">YOUR VOICE</string>
+    <string name="remote">REMOTE</string>
+    <string name="awaiting_voice">Hold the talk button to speak…</string>
+    <string name="no_incoming">No incoming messages yet</string>
+    <string name="select_language">Select language</string>
+    <string name="language">LANGUAGE</string>
+    <string name="transport_label">LINK</string>
+    <string name="connect_label">CONNECT</string>
+    <string name="mode_label">MODE</string>
+    <string name="standby_ready">READY</string>
+    <string name="listening_active">LISTENING</string>
+    <string name="processing_voice">PROCESSING VOICE</string>
+    <string name="transmitting">TRANSMITTING</string>
+    <string name="receiving">RECEIVING</string>
+    <string name="generating_voice">GENERATING VOICE</string>
+    <string name="playing">PLAYING</string>
+    <string name="channel_busy">CHANNEL BUSY</string>
+    <string name="connected_indicator">CONNECTED</string>
+    <string name="offline_ready_indicator">OFFLINE READY</string>
+    <string name="disconnected_indicator">OFFLINE</string>
+    <string name="no_device">No device</string>
+    <string name="e2e_metric">E2E</string>
+    <string name="stt_metric">STT</string>
+    <string name="network_metric">NET</string>
+    <string name="tts_metric">TTS</string>
+    <string name="rtf_metric">RTF</string>
+    <string name="nearby_devices_scan">Scanning nearby devices…</string>
+    <string name="peer_placeholder">Not connected</string>
+    <string name="connection_failed_ui">CONNECTION FAILED</string>
 </resources>

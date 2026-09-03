@@ -7,6 +7,8 @@ import android.os.Build
 import android.os.Bundle
 import android.view.MotionEvent
 import android.view.View
+import android.view.animation.Animation
+import android.view.animation.ScaleAnimation
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Toast
@@ -52,6 +54,8 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var orchestrator: PipelineOrchestrator
 
+    private var isPulsing = false
+
     private val requiredPermissions by lazy {
         val list = mutableListOf(
             Manifest.permission.RECORD_AUDIO,
@@ -91,6 +95,8 @@ class MainActivity : AppCompatActivity() {
         setupPttAndAlertButtons()
         setupDeviceConnection()
         observeOrchestratorState()
+
+        renderStatus(TransceiverState.IDLE)
 
         checkAndRequestPermissions()
     }
@@ -147,14 +153,14 @@ class MainActivity : AppCompatActivity() {
                         currentTransport = bluetoothTransport
                         orchestrator.transport = bluetoothTransport
                         orchestrator.setupTransportListener()
-                        binding.tvStatusText.text = "Transport: Bluetooth (Ready)"
+                        binding.tvStatusDetail.text = "Bluetooth"
                     }
                     R.id.btnTransportWifi -> {
                         currentTransport?.disconnect()
                         currentTransport = wifiDirectTransport
                         orchestrator.transport = wifiDirectTransport
                         orchestrator.setupTransportListener()
-                        binding.tvStatusText.text = "Transport: Wi-Fi Direct (Ready)"
+                        binding.tvStatusDetail.text = "Wi-Fi Direct"
                     }
                 }
             }
@@ -168,10 +174,15 @@ class MainActivity : AppCompatActivity() {
                     orchestrator.stopContinuousListening()
                     binding.btnPtt.visibility = View.VISIBLE
                     binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
+                    renderStatus(orchestrator.transceiverState.value)
                 }
                 R.id.radioContinuous -> {
                     orchestrator.startContinuousListening()
-                    binding.btnPtt.visibility = View.GONE
+                    // Keep the central circle visible as the status node; the touch
+                    // handler already ignores presses in continuous mode.
+                    binding.btnPtt.visibility = View.VISIBLE
+                    binding.btnPtt.text = getString(R.string.listening_active)
+                    renderStatus(orchestrator.transceiverState.value)
                     Toast.makeText(this, "Continuous Mode Active: Listening with VAD", Toast.LENGTH_SHORT).show()
                 }
             }
@@ -180,20 +191,23 @@ class MainActivity : AppCompatActivity() {
 
     @SuppressLint("ClickableViewAccessibility")
     private fun setupPttAndAlertButtons() {
+        val activeRed = ContextCompat.getColor(this, R.color.comm_red)
+
         binding.btnPtt.setOnTouchListener { _, event ->
             if (orchestrator.operatingMode == OperatingMode.CONTINUOUS) return@setOnTouchListener false
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    binding.btnPtt.setBackgroundColor(ContextCompat.getColor(this, R.color.ptt_active))
+                    binding.btnPtt.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_red)
                     binding.btnPtt.text = getString(R.string.ptt_release_to_send)
                     orchestrator.onPttPressed(isAlert = false)
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    binding.btnPtt.setBackgroundColor(ContextCompat.getColor(this, R.color.ptt_idle))
+                    // Restore the state-driven color (renderStatus will re-tint on next state emit).
                     binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
                     orchestrator.onPttReleased()
+                    renderStatus(orchestrator.transceiverState.value)
                     true
                 }
                 else -> false
@@ -212,11 +226,13 @@ class MainActivity : AppCompatActivity() {
     private fun setupDeviceConnection() {
         binding.btnScanConnect.setOnClickListener {
             val transport = currentTransport ?: return@setOnClickListener
-            binding.tvStatusText.text = "Scanning nearby devices..."
+            binding.tvStatusDetail.text = getString(R.string.nearby_devices_scan)
+            renderConnection(ConnectionState.CONNECTING)
             transport.discoverDevices { devices ->
                 runOnUiThread {
                     if (devices.isEmpty()) {
-                        Toast.makeText(this, "No paired / nearby devices found", Toast.LENGTH_SHORT).show()
+                        binding.tvStatusDetail.text = getString(R.string.no_device)
+                        Toast.makeText(this, "No nearby devices found", Toast.LENGTH_SHORT).show()
                         return@runOnUiThread
                     }
 
@@ -225,15 +241,18 @@ class MainActivity : AppCompatActivity() {
                         .setTitle("Select Transceiver Peer")
                         .setItems(names) { _, which ->
                             val selectedDevice = devices[which]
-                            binding.tvStatusText.text = "Connecting to ${selectedDevice.name}..."
+                            binding.tvStatusDetail.text = "Connecting to ${selectedDevice.name}…"
+                            renderConnection(ConnectionState.CONNECTING)
                             transport.connect(selectedDevice) { success ->
                                 if (success) {
-                                    binding.tvStatusText.text = "Connected: ${selectedDevice.name} (establishing secure session…)"
-                                    binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.accent_green)
+                                    binding.tvStatusText.text = getString(R.string.connected_indicator)
+                                    binding.tvStatusDetail.text = selectedDevice.name
+                                    renderConnection(ConnectionState.CONNECTED)
                                     orchestrator.initiateSessionHandshake()
                                 } else {
-                                    binding.tvStatusText.text = "Connection Failed"
-                                    binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.accent_red)
+                                    binding.tvStatusText.text = getString(R.string.connection_failed_ui)
+                                    binding.tvStatusDetail.text = getString(R.string.connection_failed_ui)
+                                    renderConnection(ConnectionState.ERROR)
                                 }
                             }
                         }
@@ -248,33 +267,7 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             orchestrator.transceiverState.collectLatest { state ->
                 runOnUiThread {
-                    when (state) {
-                        TransceiverState.IDLE -> {
-                            binding.tvStatusText.text = "Status: Standby (Offline Ready)"
-                        }
-                        TransceiverState.LISTENING -> {
-                            binding.tvStatusText.text = "Status: Listening (VAD Active)…"
-                        }
-                        TransceiverState.TRANSCRIBING -> {
-                            binding.tvStatusText.text = "Status: Transcribing (Offline STT)…"
-                        }
-                        TransceiverState.TRANSMITTING -> {
-                            binding.tvStatusText.text = "Status: Transmitting Packet…"
-                        }
-                        TransceiverState.RECEIVING -> {
-                            binding.tvStatusText.text = "Status: Receiving Packet…"
-                        }
-                        TransceiverState.SYNTHESIZING -> {
-                            binding.tvStatusText.text = "Status: Synthesizing Audio (TTS)…"
-                        }
-                        TransceiverState.PLAYING -> {
-                            binding.tvStatusText.text = "Status: Playing Audio (Speaker)…"
-                        }
-                        TransceiverState.COLLISION_BUSY -> {
-                            binding.tvStatusText.text = "Channel Busy: Incoming Audio Active"
-                            Toast.makeText(this@MainActivity, "Channel Busy (Half-Duplex)", Toast.LENGTH_SHORT).show()
-                        }
-                    }
+                    renderStatus(state)
                 }
             }
         }
@@ -283,6 +276,7 @@ class MainActivity : AppCompatActivity() {
             orchestrator.lastTranscribedText.collectLatest { text ->
                 if (text.isNotBlank()) {
                     binding.tvLastSttText.text = text
+                    binding.tvLastSttText.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_white))
                 }
             }
         }
@@ -291,6 +285,7 @@ class MainActivity : AppCompatActivity() {
             orchestrator.lastReceivedText.collectLatest { text ->
                 if (text.isNotBlank()) {
                     binding.tvLastReceivedText.text = text
+                    binding.tvLastReceivedText.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_white))
                 }
             }
         }
@@ -299,9 +294,119 @@ class MainActivity : AppCompatActivity() {
             orchestrator.lastLatencyMetrics.collectLatest { metrics ->
                 metrics?.let {
                     binding.tvLatencyMetrics.text =
-                        "STT: ${it.sttLatencyMs}ms (RTF ${String.format("%.2f", it.rtf)}) | Net: ${it.transportLatencyMs}ms | TTS: ${it.ttsLatencyMs}ms | E2E: ${it.totalE2eLatencyMs}ms"
+                        "STT: ${it.sttLatencyMs} ms    RTF: ${String.format("%.2f", it.rtf)}    " +
+                        "NET: ${it.transportLatencyMs} ms    TTS: ${it.ttsLatencyMs} ms    " +
+                        "E2E: ${it.totalE2eLatencyMs} ms"
+                    binding.tvPerfSummary.text = "${it.totalE2eLatencyMs} ms  E2E"
                 }
             }
+        }
+
+        binding.perfChip.setOnClickListener {
+            val expanded = binding.tvLatencyMetrics.visibility == View.GONE
+            binding.tvLatencyMetrics.visibility = if (expanded) View.VISIBLE else View.GONE
+        }
+    }
+
+    /** Map existing TransceiverState to the central status visual. */
+    private fun renderStatus(state: TransceiverState) {
+        val green = ContextCompat.getColor(this, R.color.comm_green)
+        val amber = ContextCompat.getColor(this, R.color.comm_amber)
+        val red = ContextCompat.getColor(this, R.color.comm_red)
+        val white = ContextCompat.getColor(this, R.color.text_white)
+
+        when (state) {
+            TransceiverState.IDLE -> {
+                binding.tvStatusText.text = getString(R.string.standby_ready)
+                binding.tvStatusText.setTextColor(white)
+                tintRadar(green, false)
+            }
+            TransceiverState.LISTENING -> {
+                binding.tvStatusText.text = getString(R.string.listening_active)
+                binding.tvStatusText.setTextColor(green)
+                tintRadar(green, true)
+            }
+            TransceiverState.TRANSCRIBING -> {
+                binding.tvStatusText.text = getString(R.string.processing_voice)
+                binding.tvStatusText.setTextColor(amber)
+                tintRadar(amber, true)
+            }
+            TransceiverState.TRANSMITTING -> {
+                binding.tvStatusText.text = getString(R.string.transmitting)
+                binding.tvStatusText.setTextColor(amber)
+                tintRadar(amber, true)
+            }
+            TransceiverState.RECEIVING -> {
+                binding.tvStatusText.text = getString(R.string.receiving)
+                binding.tvStatusText.setTextColor(amber)
+                tintRadar(amber, true)
+            }
+            TransceiverState.SYNTHESIZING -> {
+                binding.tvStatusText.text = getString(R.string.generating_voice)
+                binding.tvStatusText.setTextColor(amber)
+                tintRadar(amber, true)
+            }
+            TransceiverState.PLAYING -> {
+                binding.tvStatusText.text = getString(R.string.playing)
+                binding.tvStatusText.setTextColor(green)
+                tintRadar(green, true)
+            }
+            TransceiverState.COLLISION_BUSY -> {
+                binding.tvStatusText.text = getString(R.string.channel_busy)
+                binding.tvStatusText.setTextColor(white)
+                tintRadar(red, true)
+                Toast.makeText(this, "Channel Busy (Half-Duplex)", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    private fun renderConnection(state: ConnectionState) {
+        when (state) {
+            ConnectionState.CONNECTED -> {
+                binding.tvHeaderConn.text = getString(R.string.connected_indicator)
+                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_green)
+            }
+            ConnectionState.CONNECTING -> {
+                binding.tvHeaderConn.text = getString(R.string.listening_active)
+                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_amber)
+            }
+            ConnectionState.DISCONNECTED -> {
+                binding.tvHeaderConn.text = getString(R.string.offline_ready_indicator)
+                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_amber)
+            }
+            ConnectionState.ERROR -> {
+                binding.tvHeaderConn.text = getString(R.string.disconnected_indicator)
+                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_red)
+            }
+        }
+    }
+
+    /** Apply color + subtle pulse animation to the radar visual. */
+    private fun tintRadar(color: Int, pulse: Boolean) {
+        try {
+            binding.btnPtt.backgroundTintList = ContextCompat.getColorStateList(this, color)
+            val glow = ContextCompat.getDrawable(this, R.drawable.status_node)?.mutate() ?: return
+            glow.setTint(color)
+            binding.statusNodeGlow.background = glow
+
+            if (pulse && !isPulsing) {
+                isPulsing = true
+                val pulse = ScaleAnimation(
+                    1.0f, 1.08f, 1.0f, 1.08f,
+                    Animation.RELATIVE_TO_SELF, 0.5f,
+                    Animation.RELATIVE_TO_SELF, 0.5f
+                ).apply {
+                    duration = 900
+                    repeatMode = Animation.REVERSE
+                    repeatCount = Animation.INFINITE
+                }
+                binding.radarContainer.startAnimation(pulse)
+            } else if (!pulse) {
+                isPulsing = false
+                binding.radarContainer.clearAnimation()
+            }
+        } catch (e: Exception) {
+            // visual nicety only — never break the app
         }
     }
 
