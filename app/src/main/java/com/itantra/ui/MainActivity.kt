@@ -228,8 +228,9 @@ class MainActivity : AppCompatActivity() {
                             binding.tvStatusText.text = "Connecting to ${selectedDevice.name}..."
                             transport.connect(selectedDevice) { success ->
                                 if (success) {
-                                    binding.tvStatusText.text = "Connected: ${selectedDevice.name}"
+                                    binding.tvStatusText.text = "Connected: ${selectedDevice.name} (establishing secure session…)"
                                     binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.accent_green)
+                                    orchestrator.initiateSessionHandshake()
                                 } else {
                                     binding.tvStatusText.text = "Connection Failed"
                                     binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.accent_red)

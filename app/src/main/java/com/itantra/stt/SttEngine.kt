@@ -44,9 +44,10 @@ class SttEngine(
     companion object {
         private const val TAG = "WhisperSttEngine"
         private const val SAMPLING_RATE = 16000
-        private const val ENCODER_ASSET = "models/stt/whisper-tiny-encoder.int8.onnx"
-        private const val DECODER_ASSET = "models/stt/whisper-tiny-decoder.int8.onnx"
-        private const val TOKENS_ASSET = "models/stt/whisper-tiny-tokens.txt"
+        // Whisper-base int8: notably more accurate than tiny on Indian languages.
+        private const val ENCODER_ASSET = "models/stt/whisper-base-encoder.int8.onnx"
+        private const val DECODER_ASSET = "models/stt/whisper-base-decoder.int8.onnx"
+        private const val TOKENS_ASSET = "models/stt/whisper-base-tokens.txt"
         private const val MIN_MODEL_SIZE_BYTES = 1024 * 1024
     }
 

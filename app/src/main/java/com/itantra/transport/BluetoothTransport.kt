@@ -5,7 +5,10 @@ import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothServerSocket
 import android.bluetooth.BluetoothSocket
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.util.Log
 import com.itantra.protocol.BinaryPacketCodec
 import com.itantra.protocol.TextPacket
@@ -102,19 +105,50 @@ class BluetoothTransport(
             return
         }
 
-        val devices = mutableListOf<DeviceInfo>()
-        val paired = bluetoothAdapter.bondedDevices
-        paired?.forEach { dev ->
-            devices.add(
-                DeviceInfo(
-                    id = dev.address,
-                    name = dev.name ?: "Unknown Device",
-                    address = dev.address,
-                    transportType = TransportType.BLUETOOTH
-                )
+        val found = linkedMapOf<String, DeviceInfo>() // dedupe by address, keep order
+
+        // 1. Always include paired/bonded devices.
+        bluetoothAdapter.bondedDevices?.forEach { dev ->
+            found[dev.address] = DeviceInfo(
+                id = dev.address,
+                name = dev.name ?: "Unknown Device",
+                address = dev.address,
+                transportType = TransportType.BLUETOOTH
             )
         }
-        onDevicesFound(devices)
+
+        // If already discovering, cancel to restart cleanly.
+        try { bluetoothAdapter.cancelDiscovery() } catch (_: Exception) {}
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                if (intent?.action == BluetoothDevice.ACTION_FOUND) {
+                    val device: BluetoothDevice? =
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    if (device != null) {
+                        found[device.address] = DeviceInfo(
+                            id = device.address,
+                            name = device.name ?: "Unknown Device",
+                            address = device.address,
+                            transportType = TransportType.BLUETOOTH
+                        )
+                    }
+                }
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_FOUND))
+
+        val discoveryOk = bluetoothAdapter.startDiscovery()
+        Log.i(TAG, "Bluetooth discovery started: $discoveryOk")
+
+        // Collect for a limited window, then report and stop discovery.
+        coroutineScope.launch {
+            delay(8000)
+            try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+            try { bluetoothAdapter.cancelDiscovery() } catch (_: Exception) {}
+            onDevicesFound(found.values.toList())
+            Log.i(TAG, "Bluetooth discovery found ${found.size} in-range device(s)")
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -129,6 +163,17 @@ class BluetoothTransport(
             try {
                 bluetoothAdapter.cancelDiscovery()
                 val btDevice: BluetoothDevice = bluetoothAdapter.getRemoteDevice(device.address)
+
+                // If not yet paired, initiate bonding and wait for it to complete.
+                if (btDevice.bondState != BluetoothDevice.BOND_BONDED) {
+                    if (!bond(btDevice)) {
+                        Log.e(TAG, "Pairing with ${device.name} failed")
+                        updateState(ConnectionState.ERROR)
+                        withContext(Dispatchers.Main) { onResult(false) }
+                        return@launch
+                    }
+                }
+
                 val socket = btDevice.createRfcommSocketToServiceRecord(APP_UUID)
                 socket.connect()
 
@@ -141,6 +186,33 @@ class BluetoothTransport(
                 withContext(Dispatchers.Main) { onResult(false) }
             }
         }
+    }
+
+    /** Initiate pairing and wait (up to 15s) for BOND_BONDED. */
+    @SuppressLint("MissingPermission")
+    private suspend fun bond(device: BluetoothDevice): Boolean = withContext(Dispatchers.IO) {
+        val bonded = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, intent: Intent?) {
+                if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
+                    val d: BluetoothDevice? =
+                        intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
+                    if (d != null && d.address == device.address) {
+                        val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
+                        if (state == BluetoothDevice.BOND_BONDED) {
+                            bonded.complete(true)
+                        } else if (state == BluetoothDevice.BOND_NONE) {
+                            bonded.complete(false)
+                        }
+                    }
+                }
+            }
+        }
+        context.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_BOND_STATE_CHANGED))
+        val ok = device.createBond()
+        val result = withTimeoutOrNull(15000) { bonded.await() } ?: false
+        try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
+        ok && result
     }
 
     private fun handleConnectedSocket(socket: BluetoothSocket) {

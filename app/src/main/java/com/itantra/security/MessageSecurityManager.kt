@@ -82,6 +82,16 @@ object MessageSecurityManager {
     }
 
     /**
+     * Convenience for the transport handshake: returns the ephemeral public key
+     * as a base64 string (safe for the packet text field) plus the private key
+     * used to derive the shared session key.
+     */
+    fun createEphemeralKeyPairBase64(): Pair<String, PrivateKey> {
+        val (pub, priv) = generateKeyPair()
+        return Base64Codec.encode(pub) to priv
+    }
+
+    /**
      * Derive shared secret between our ephemeral private key and a peer's
      * public key, then expand it via HKDF-SHA256 into a 32-byte session key.
      * @return raw 32-byte session key (feeds [setSessionKey]).

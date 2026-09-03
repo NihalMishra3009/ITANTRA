@@ -129,6 +129,10 @@ class PipelineOrchestrator(
 
         current.startListening(
             onPacketReceived = { packet ->
+                // Handle session handshake / peer notification before mesh routing.
+                if (handleSessionPacket(packet)) {
+                    return@startListening
+                }
                 meshRoutingManager?.handleIncomingPacket(packet) { deliveredPacket ->
                     handleIncomingPacket(deliveredPacket)
                 }
@@ -137,6 +141,72 @@ class PipelineOrchestrator(
                 Log.i(TAG, "Transport state changed: $state")
             }
         )
+    }
+
+    // --- Session handshake (ECDH) -------------------------------------------
+
+    private var ephemeralPrivateKey: java.security.PrivateKey? = null
+
+    /**
+     * Kick off the ECDH handshake to a newly-connected peer: send it our
+     * ephemeral public key inside a SESSION_START packet.
+     */
+    fun initiateSessionHandshake() {
+        val t = transport ?: return
+        if (!t.isConnected()) return
+        val (pubB64, priv) = MessageSecurityManager.createEphemeralKeyPairBase64()
+        ephemeralPrivateKey = priv
+        val packet = TextPacket(
+            senderId = deviceSenderId,
+            recipientId = "*",
+            type = PacketType.SESSION_START,
+            language = currentLanguage.code,
+            text = pubB64 // our ephemeral public key
+        )
+        t.sendPacket(packet)
+        Log.i(TAG, "Sent SESSION_START (ephemeral public key) to peer")
+    }
+
+    /**
+     * Handles a SESSION_START packet. Returns true if consumed (not a data packet).
+     * Initiator logic: the peer replies with ITS public key; we derive the shared key.
+     */
+    private fun handleSessionPacket(packet: TextPacket): Boolean {
+        if (packet.type == PacketType.SESSION_START) {
+            coroutineScope.launch {
+                try {
+                    val peerPubB64 = packet.text
+                    val peerPub = android.util.Base64.decode(peerPubB64, android.util.Base64.NO_WRAP)
+                    if (ephemeralPrivateKey != null) {
+                        // We are the initiator: derive the shared key now.
+                        val shared = MessageSecurityManager.deriveSharedSessionKey(ephemeralPrivateKey!!, peerPub)
+                        MessageSecurityManager.setSessionKey(shared)
+                        ephemeralPrivateKey = null
+                        _lastReceivedText.value = "Connected to peer ${packet.senderId} (session secured)"
+                        Log.i(TAG, "Session established with ${packet.senderId} (secure channel up)")
+                    } else {
+                        // We are the responder: derive shared key, then reply with our public key.
+                        val (ourPubB64, ourPriv) = MessageSecurityManager.createEphemeralKeyPairBase64()
+                        val shared = MessageSecurityManager.deriveSharedSessionKey(ourPriv, peerPub)
+                        MessageSecurityManager.setSessionKey(shared)
+                        _lastReceivedText.value = "Connected to peer ${packet.senderId} (session secured)"
+                        Log.i(TAG, "Session established with ${packet.senderId}; replying")
+                        val reply = TextPacket(
+                            senderId = deviceSenderId,
+                            recipientId = packet.senderId,
+                            type = PacketType.SESSION_START,
+                            language = currentLanguage.code,
+                            text = ourPubB64
+                        )
+                        transport?.sendPacket(reply)
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Session handshake failed", e)
+                }
+            }
+            return true
+        }
+        return false
     }
 
     /**
