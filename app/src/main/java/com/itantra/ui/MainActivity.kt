@@ -103,9 +103,6 @@ class MainActivity : AppCompatActivity() {
 
         renderStatus(TransceiverState.IDLE)
 
-        // Default mode is PTT -> single circle already shows PTT controls.
-        morphCircleToPtt()
-
         checkAndRequestPermissions()
     }
 
@@ -176,12 +173,16 @@ class MainActivity : AppCompatActivity() {
             when (checkedId) {
                 R.id.radioPtt -> {
                     orchestrator.stopContinuousListening()
-                    morphCircleToPtt()
+                    binding.btnPtt.visibility = View.VISIBLE
+                    binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
                     renderStatus(orchestrator.transceiverState.value)
                 }
                 R.id.radioContinuous -> {
                     orchestrator.startContinuousListening()
-                    morphCircleToContinuous()
+                    // Keep the central circle visible as the status node; the touch
+                    // handler already ignores presses in continuous mode.
+                    binding.btnPtt.visibility = View.VISIBLE
+                    binding.btnPtt.text = getString(R.string.listening_active)
                     renderStatus(orchestrator.transceiverState.value)
                     Toast.makeText(this, "Continuous Mode Active: Listening with VAD", Toast.LENGTH_SHORT).show()
                 }
@@ -189,30 +190,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    /** Single centre circle shows PTT semantics: hold-to-talk. */
-    private fun morphCircleToPtt() {
-        binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
-        binding.btnPtt.setIconResource(R.drawable.ic_mic)
-    }
-
-    /** Single centre circle morphs to the Continuous control. */
-    private fun morphCircleToContinuous() {
-        binding.btnPtt.text = getString(R.string.listening_active)
-        binding.btnPtt.setIconResource(R.drawable.ic_continuous)
-    }
-
     @SuppressLint("ClickableViewAccessibility")
     private fun setupPttAndAlertButtons() {
         val activeRed = ContextCompat.getColor(this, R.color.comm_red)
 
         binding.btnPtt.setOnTouchListener { _, event ->
-            // In Continuous mode the circle is a tap-to-toggle control, not PTT.
-            if (orchestrator.operatingMode == OperatingMode.CONTINUOUS) {
-                if (event.action == MotionEvent.ACTION_UP) {
-                    stopContinuousMode()
-                }
-                return@setOnTouchListener true
-            }
+            if (orchestrator.operatingMode == OperatingMode.CONTINUOUS) return@setOnTouchListener false
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -239,15 +222,6 @@ class MainActivity : AppCompatActivity() {
                 orchestrator.onPttReleased()
             }, 1000)
         }
-    }
-
-    /** Tapping the continuous-mode circle stops continuous listening and returns to PTT. */
-    private fun stopContinuousMode() {
-        orchestrator.stopContinuousListening()
-        binding.radioPtt.isChecked = true
-        morphCircleToPtt()
-        renderStatus(orchestrator.transceiverState.value)
-        Toast.makeText(this, "Continuous Mode Stopped", Toast.LENGTH_SHORT).show()
     }
 
     private fun setupDeviceConnection() {
