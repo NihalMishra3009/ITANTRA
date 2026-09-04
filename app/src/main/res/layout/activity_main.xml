@@ -153,28 +153,6 @@
                     android:layout_gravity="center"
                     android:alpha="0.15"
                     android:background="@drawable/status_node" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnContinuous"
-                    android:layout_width="172dp"
-                    android:layout_height="172dp"
-                    android:layout_gravity="center"
-                    android:background="@drawable/status_node"
-                    android:backgroundTint="@null"
-                    android:insetTop="0dp"
-                    android:insetBottom="0dp"
-                    android:stateListAnimator="@null"
-                    android:text="@string/listening_active"
-                    android:textColor="@color/bg_black"
-                    android:textSize="13sp"
-                    android:textStyle="bold"
-                    android:visibility="invisible"
-                    app:cornerRadius="86dp"
-                    app:icon="@drawable/ic_continuous"
-                    app:iconGravity="textStart"
-                    app:iconSize="22dp"
-                    app:iconTint="@color/bg_black"
-                    app:rippleColor="@android:color/transparent" />
             </FrameLayout>
 
             <!-- Central status text -->
