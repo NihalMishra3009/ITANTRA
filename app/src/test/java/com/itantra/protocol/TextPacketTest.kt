@@ -1,5 +1,6 @@
 package com.itantra.protocol
 
+import com.itantra.security.MessageSecurityManager
 import org.junit.Assert.*
 import org.junit.Test
 import java.nio.ByteBuffer
@@ -163,6 +164,38 @@ class TextPacketTest {
         // ACK round-trips through the codec preserving its own (exact) id
         val decodedAck = codec.decode(codec.encode(ack))!!
         assertEquals("ack_$originalId", decodedAck.messageId)
+    }
+
+    @Test
+    fun testEncryptedPacketDecryptsAcrossCodecRoundTrip() {
+        // Regression test: the binary codec must preserve the FULL millisecond
+        // timestamp, or AEAD AAD binding breaks and the receiver cannot decrypt.
+        val codec = BinaryPacketCodec()
+        val key = ByteArray(32) { it.toByte() }
+        MessageSecurityManager.setSessionKey(key) // mirror production global-session path
+
+        val packet = TextPacket(
+            messageId = "aad_test_001",
+            senderId = "ITN-A111",
+            recipientId = "ITN-B222",
+            type = PacketType.DATA,
+            language = "hi",
+            text = "मुझे मदद चाहिए",
+            timestamp = System.currentTimeMillis() // ms precision
+        ).withEncryption() // uses global session key, like production code
+
+        val encoded = codec.encode(packet) // uses global session key, like transports
+        val decoded = codec.decode(encoded)
+
+        assertNotNull("Encoded encrypted packet must decode", decoded)
+        assertEquals("Timestamp must survive with full ms precision", packet.timestamp, decoded!!.timestamp)
+        assertEquals("messageId must survive", "aad_test_001", decoded.messageId)
+        assertEquals("senderId must survive", "ITN-A111", decoded.senderId)
+        assertEquals("recipientId must survive", "ITN-B222", decoded.recipientId)
+
+        // The decrypted text must match the original — proves AAD agreement.
+        val plain = decoded.withDecryption()
+        assertEquals("AEAD decrypt must succeed with preserved AAD fields", "मुझे मदद चाहिए", plain.text)
     }
 
     @Test

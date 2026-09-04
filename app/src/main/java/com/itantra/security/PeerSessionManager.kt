@@ -96,16 +96,30 @@ object PeerSessionManager {
 
     fun handleHandshake(peerNodeId: String, peerPubKeyB64: String): HandshakeResult? {
         return try {
-            val peerPub = android.util.Base64.decode(peerPubKeyB64, android.util.Base64.NO_WRAP)
-            val pendingPriv = pendingHandshakes.remove(peerNodeId)
+            val peerPub = Base64Codec.decode(peerPubKeyB64)
+            var pendingPriv = pendingHandshakes.remove(peerNodeId)
+            if (pendingPriv == null) {
+                // The initiator broadcasts SESSION_START with peerNodeId="*" before
+                // it knows the peer's actual node ID. When the peer replies, the
+                // pending private key is stored under "*" — fall back to it so we
+                // REUSE our original ephemeral private key. Otherwise we'd generate
+                // a fresh keypair here and derive a DIFFERENT shared secret than the
+                // responder, causing HMAC/AEAD mismatches (packets silently dropped).
+                val broadcastPending = pendingHandshakes.remove("*")
+                if (broadcastPending != null) {
+                    pendingPriv = broadcastPending
+                    // Re-key under the actual peer id for future lookups.
+                    pendingHandshakes[peerNodeId] = broadcastPending
+                }
+            }
             if (pendingPriv != null) {
                 // We initiated this handshake: derive the shared key, no reply needed.
                 val shared = MessageSecurityManager.deriveSharedSessionKey(pendingPriv, peerPub)
                 setSessionKey(peerNodeId, shared)
                 HandshakeResult(shared, replyPublicKeyB64 = null)
             } else {
-                // We are the responder: generate our own ephemeral key, derive the
-                // shared key, and return our public key for the reply.
+                // We are the responder (no pending outbound key): generate our own
+                // ephemeral key, derive the shared key, return our public key for reply.
                 val (ourPubB64, ourPriv) = MessageSecurityManager.createEphemeralKeyPairBase64()
                 val shared = MessageSecurityManager.deriveSharedSessionKey(ourPriv, peerPub)
                 setSessionKey(peerNodeId, shared)

@@ -244,6 +244,9 @@ class BluetoothTransport(
                             withContext(Dispatchers.Main) {
                                 onPacketCallback?.invoke(packet)
                             }
+                        } else {
+                            Log.w(TAG, "Bluetooth peer $address: codec.decode returned null (${buffer.size}B) — " +
+                                    "HMAC/format rejected")
                         }
                     }
                 } catch (e: Exception) {

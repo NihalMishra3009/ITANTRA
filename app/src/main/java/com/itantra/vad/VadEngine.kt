@@ -86,9 +86,12 @@ class VadEngine(
     fun processChunk(audioChunk: FloatArray): VadEvent {
         val now = System.currentTimeMillis()
 
-        // Try genuine Silero VAD first; fall back to its internal energy detector
-        // if the bundled model is incompatible (sherpa-onnx 1.x with v4 model).
-        lastSpeechProb = runSileroWindowed(audioChunk)
+        // Energy-based VAD is the ACTIVE detector. The bundled Silero model is
+        // v4-format and incompatible with sherpa-onnx 1.13.7's Vad API — it loads
+        // but returns a constant ~0.005 baseline regardless of speech, which would
+        // make isChunkSpeech always false and break utterance capture.
+        // Energy VAD responds correctly to real speech, so use it directly.
+        lastSpeechProb = runEnergyVad(audioChunk)
 
         if (now - lastDiagLogMs >= 500) {
             lastDiagLogMs = now
@@ -158,18 +161,22 @@ class VadEngine(
     }
 
     /**
-     * RMS energy fallback. Clearly a fallback — never reported as neural VAD.
-     * Used when the bundled Silero model is incompatible with the sherpa-onnx API.
+     * RMS energy fallback. This is the ACTIVE detector when a compatible neural
+     * Silero model is unavailable. Used only because the bundled Silero model is
+     * incompatible with the sherpa-onnx runtime.
      */
     private fun runEnergyVad(audioChunk: FloatArray): Float {
         if (audioChunk.isEmpty()) return 0.0f
         var sumSquares = 0.0
         for (v in audioChunk) sumSquares += v * v
         val rms = Math.sqrt(sumSquares / audioChunk.size).toFloat()
+        // Thresholds tuned so normal speech (rms > 0.008) is detected as speech
+        // against the default speechThreshold=0.5.
         return when {
-            rms > 0.025f -> 0.9f
-            rms > 0.015f -> 0.6f
-            rms > 0.008f -> 0.4f
+            rms > 0.02f -> 0.9f
+            rms > 0.012f -> 0.65f
+            rms > 0.008f -> 0.55f
+            rms > 0.004f -> 0.3f
             else -> 0.05f
         }
     }

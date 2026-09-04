@@ -70,7 +70,11 @@ class BinaryPacketCodec {
                 (if (packet.type == PacketType.EMERGENCY) FLAG_PRIORITY else 0) or
                 (if (skipAuth) FLAG_UNAUTH else 0)
 
-        val ts = (packet.timestamp / 1000) * 1000L
+        // Preserve the FULL millisecond timestamp. Truncating to seconds here
+        // would break AEAD decryption on the receiver: the encryption AAD binds
+        // the exact ms timestamp, so a rounded value causes an AAD mismatch and
+        // the payload is silently dropped (no message, no audio).
+        val ts = packet.timestamp
         val ttlSecs = (packet.ttlMs / 1000).toInt().coerceAtMost(0x7FFFFFFF)
 
         val msgIdLen = msgIdBytes.size.coerceAtMost(0x7FFFFFFF)

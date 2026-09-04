@@ -60,4 +60,38 @@ class SecurityTest {
         assertArrayEquals(h1, h2)
         assertFalse(MessageSecurityManager.computeHmac(data, otherKey).contentEquals(h1))
     }
+
+    @Test
+    fun testBroadcastInitiatorDerivesSameKeyAsResponder() {
+        // Regression: initiator stores its pending ephemeral private under "*"
+        // (it broadcasts before knowing the peer's node id). When the peer replies
+        // with its REAL node id, the initiator must REUSE that pending key via the
+        // "*" fallback so both sides derive the SAME shared secret. Without the
+        // fallback the initiator would mint a fresh keypair -> different secret
+        // -> HMAC fail -> packets silently dropped.
+        PeerSessionManager.clearAll()
+
+        // DEVICE A (initiator) broadcasts its ephemeral public key; pending stored under "*".
+        val aPub = PeerSessionManager.initiateHandshake("*")
+
+        // DEVICE B (responder) — conceptually a SEPARATE device. We simulate B's
+        // side by asserting the fallback does NOT consume A's "*" pending: B has
+        // no pending, so it goes down the responder path.
+        // (In the singleton test the fallback is exercised when the reply comes
+        // back to A. We test that path directly below.)
+
+        // Simulate B deriving its shared key with its own fresh ephemeral key.
+        val (bPubB64, bPriv) = MessageSecurityManager.createEphemeralKeyPairBase64()
+        val bKey = MessageSecurityManager.deriveSharedSessionKey(bPriv, Base64Codec.decode(aPub))
+        PeerSessionManager.setSessionKey("ITN-A", bKey)
+
+        // Now A receives B's reply (peer id = ITN-B). A had pending under "*".
+        val aResult = PeerSessionManager.handleHandshake("ITN-B", bPubB64)!!
+        assertNull("A is the initiator: must not reply again", aResult.replyPublicKeyB64)
+
+        // A must have derived the SAME key as B.
+        val aKey = PeerSessionManager.getSessionKey("ITN-B")!!
+        assertArrayEquals("Both devices must derive the identical shared key", aKey, bKey)
+        assertEquals(32, aKey.size)
+    }
 }

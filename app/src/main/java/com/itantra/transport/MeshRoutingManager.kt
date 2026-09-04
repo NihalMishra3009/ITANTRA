@@ -224,7 +224,12 @@ class MeshRoutingManager(
             }
 
             // Decrypt payload for local consumption
-            val decryptedPacket = packet.withDecryption()
+            val decryptedPacket = try {
+                packet.withDecryption()
+            } catch (e: Exception) {
+                Log.w(TAG, "Packet ${packet.messageId} failed end-to-end decryption: ${e.message}")
+                return
+            }
             onLocalDeliver(decryptedPacket)
         } else {
             // 5. Multi-Hop Intermediate Relay Forwarding — route-aware, next-hop targeted.
