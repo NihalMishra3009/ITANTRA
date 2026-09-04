@@ -103,6 +103,12 @@ class MainActivity : AppCompatActivity() {
 
         renderStatus(TransceiverState.IDLE)
 
+        // Default mode is PTT -> PTT at centre, continuous below.
+        setCentreButton(active = binding.btnPtt, inactive = binding.btnContinuous)
+        binding.btnPtt.visibility = View.VISIBLE
+        binding.btnContinuous.visibility = View.VISIBLE
+        binding.btnContinuous.text = getString(R.string.listening_active)
+
         checkAndRequestPermissions()
     }
 
@@ -173,21 +179,44 @@ class MainActivity : AppCompatActivity() {
             when (checkedId) {
                 R.id.radioPtt -> {
                     orchestrator.stopContinuousListening()
+                    // PTT at centre, continuous below.
+                    setCentreButton(active = binding.btnPtt, inactive = binding.btnContinuous)
                     binding.btnPtt.visibility = View.VISIBLE
+                    binding.btnContinuous.visibility = View.VISIBLE
                     binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
                     renderStatus(orchestrator.transceiverState.value)
                 }
                 R.id.radioContinuous -> {
                     orchestrator.startContinuousListening()
-                    // Keep the central circle visible as the status node; the touch
-                    // handler already ignores presses in continuous mode.
+                    // Continuous at centre, PTT below.
+                    setCentreButton(active = binding.btnContinuous, inactive = binding.btnPtt)
                     binding.btnPtt.visibility = View.VISIBLE
-                    binding.btnPtt.text = getString(R.string.listening_active)
+                    binding.btnContinuous.visibility = View.VISIBLE
+                    binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
+                    binding.btnContinuous.text = getString(R.string.listening_active)
                     renderStatus(orchestrator.transceiverState.value)
                     Toast.makeText(this, "Continuous Mode Active: Listening with VAD", Toast.LENGTH_SHORT).show()
                 }
             }
         }
+    }
+
+    /**
+     * Positions two radar buttons within the radar FrameLayout so the ACTIVE one
+     * sits at the centre and the INACTIVE one sits below it. Both are 172dp in a
+     * 1:1 square container, so the below-center offset is one button height.
+     */
+    private fun setCentreButton(active: View, inactive: View) {
+        val offset = 172f * resources.displayMetrics.density // one button height in px
+        applyButtonPosition(active, translationY = 0f)
+        applyButtonPosition(inactive, translationY = offset)
+    }
+
+    /** Layout both buttons at centre (FrameLayout layout_gravity=center), then
+     *  drop the inactive one by `translationY` pixels. */
+    private fun applyButtonPosition(btn: View, translationY: Float) {
+        btn.translationY = translationY
+        btn.bringToFront()
     }
 
     @SuppressLint("ClickableViewAccessibility")
@@ -212,6 +241,17 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 else -> false
+            }
+        }
+
+        // Continuous button: single tap toggles continuous listening.
+        binding.btnContinuous.setOnClickListener {
+            val mode = orchestrator.operatingMode
+            if (mode == OperatingMode.CONTINUOUS) {
+                orchestrator.stopContinuousListening()
+                binding.radioPtt.isChecked = true
+            } else {
+                binding.radioContinuous.isChecked = true
             }
         }
 
@@ -385,10 +425,19 @@ class MainActivity : AppCompatActivity() {
     /** Apply color + subtle pulse animation to the radar visual. */
     private fun tintRadar(color: Int, pulse: Boolean) {
         try {
-            binding.btnPtt.backgroundTintList = ContextCompat.getColorStateList(this, color)
+            val activeBtn = if (orchestrator.operatingMode == OperatingMode.CONTINUOUS)
+                binding.btnContinuous else binding.btnPtt
+
+            activeBtn.backgroundTintList = ContextCompat.getColorStateList(this, color)
             val glow = ContextCompat.getDrawable(this, R.drawable.status_node)?.mutate() ?: return
             glow.setTint(color)
             binding.statusNodeGlow.background = glow
+
+            // de-tint the inactive button
+            val inactiveBtn = if (orchestrator.operatingMode == OperatingMode.CONTINUOUS)
+                binding.btnPtt else binding.btnContinuous
+            inactiveBtn.backgroundTintList =
+                ContextCompat.getColorStateList(this, R.color.comm_green_dim)
 
             if (pulse && !isPulsing) {
                 isPulsing = true
