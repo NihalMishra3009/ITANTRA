@@ -28,6 +28,7 @@ import com.itantra.orchestrator.TransceiverState
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
 import com.itantra.transport.BluetoothTransport
+import com.itantra.transport.CompositeTransport
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.DeviceInfo
 import com.itantra.transport.TransportLayer
@@ -115,7 +116,8 @@ class MainActivity : AppCompatActivity() {
 
         bluetoothTransport = BluetoothTransport(this)
         wifiDirectTransport = WifiDirectTransport(this)
-        currentTransport = bluetoothTransport
+        // Composite transport enables multi-peer relay (A↔R1 via BT, R1↔R2 via WiFi)
+        currentTransport = CompositeTransport(listOf(bluetoothTransport!!, wifiDirectTransport!!))
 
         orchestrator = PipelineOrchestrator(
             context = this,
@@ -154,20 +156,14 @@ class MainActivity : AppCompatActivity() {
             if (isChecked) {
                 when (checkedId) {
                     R.id.btnTransportBt -> {
-                        currentTransport?.disconnect()
-                        currentTransport = bluetoothTransport
-                        orchestrator.transport = bluetoothTransport
-                        orchestrator.setupTransportListener()
                         binding.tvStatusDetail.text = "Bluetooth"
                     }
                     R.id.btnTransportWifi -> {
-                        currentTransport?.disconnect()
-                        currentTransport = wifiDirectTransport
-                        orchestrator.transport = wifiDirectTransport
-                        orchestrator.setupTransportListener()
                         binding.tvStatusDetail.text = "Wi-Fi Direct"
                     }
                 }
+                // Re-setup transport listener so MeshRoutingManager uses the composite
+                orchestrator.setupTransportListener()
             }
         }
     }

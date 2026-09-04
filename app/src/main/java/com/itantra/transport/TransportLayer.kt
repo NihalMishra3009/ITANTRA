@@ -23,6 +23,10 @@ enum class ConnectionState {
 
 /**
  * Unified Transport Layer Interface for offline peer-to-peer transmission.
+ *
+ * `sendPacket` is the legacy single-socket broadcast path — still works for
+ * direct 1-hop links.  `sendToPeer` targets a specific peer by node ID — the
+ * correct path for routed relay traffic.
  */
 interface TransportLayer {
     val transportType: TransportType
@@ -34,4 +38,7 @@ interface TransportLayer {
     fun sendPacket(packet: TextPacket): Boolean
     fun disconnect()
     fun isConnected(): Boolean
+
+    /** Send to a specific peer by node ID. Falls back to sendPacket if unknown. */
+    fun sendToPeer(nodeId: String, packet: TextPacket): Boolean = sendPacket(packet)
 }

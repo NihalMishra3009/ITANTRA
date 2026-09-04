@@ -13,10 +13,12 @@ import com.itantra.protocol.TextPacket
 import com.itantra.security.MessageSecurityManager
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
+import com.itantra.transport.CompositeTransport
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.MeshRoutingManager
 import com.itantra.transport.OutboxDatabase
 import com.itantra.transport.TransportLayer
+import com.itantra.transport.TransportManager
 import com.itantra.tts.TtsEngine
 import com.itantra.vad.VadEngine
 import com.itantra.vad.VadEvent
@@ -129,27 +131,31 @@ class PipelineOrchestrator(
     }
 
     fun setupTransportListener() {
-        val current = transport ?: return
         meshRoutingManager?.release()
         val db = OutboxDatabase.getDatabase(context)
         val discoveryManager = com.itantra.transport.NetworkDiscoveryManager(deviceSenderId)
         discoveryManager.onRouteResponseReady = { response ->
-            current.sendPacket(response)
+            transport?.sendPacket(response)
         }
         discoveryManager.onRouteDiscovered = { viaNode, dest, nextHop, hops ->
             Log.i(TAG, "Route discovered to $dest via $nextHop ($hops hops)")
         }
+
+        val effectiveTransport = transport ?: return
+
         meshRoutingManager = MeshRoutingManager(
             deviceSenderId,
-            current,
+            effectiveTransport,
             outboxDao = db.outboxDao(),
             discovery = discoveryManager,
             deliveryTracker = deliveryTracker
         )
 
-        current.startListening(
+        // Wire the packet callback. For CompositeTransport, each underlying
+        // transport's startListening is already wired. For a single transport,
+        // wire it here.
+        effectiveTransport.startListening(
             onPacketReceived = { packet ->
-                // Handle session handshake / peer notification before mesh routing.
                 if (handleSessionPacket(packet)) {
                     return@startListening
                 }

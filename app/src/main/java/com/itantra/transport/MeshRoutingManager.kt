@@ -147,7 +147,7 @@ class MeshRoutingManager(
 
     /**
      * Handles incoming packet: Deduplication, ACK generation, Intermediate Multi-hop Forwarding, or Local Consumption.
-     * Integrity is verified at the transport boundary (BinaryPacketCodec HMAC); here we enforce TTL + dedup.
+     * Integrity is verified at the transport boundary (BinaryPacketCodec HMAC); here we enforce TTL + dedup + loop prevention.
      */
     fun handleIncomingPacket(packet: TextPacket, onLocalDeliver: (TextPacket) -> Unit) {
         // 1. Verify TTL
@@ -156,9 +156,10 @@ class MeshRoutingManager(
             return
         }
 
-        // 2. Deduplication check
+        // 2. Loop prevention + deduplication: if already processed, stop.
+        //    This prevents R1 → R2 → R1 infinite forwarding loops.
         if (!seenMessageIds.add(packet.messageId)) {
-            Log.d(TAG, "Duplicate packet ${packet.messageId} ignored")
+            Log.d(TAG, "Duplicate packet ${packet.messageId} ignored (dedup/loop prevention)")
             return
         }
         if (seenMessageIds.size > SEEN_CACHE_MAX_SIZE) {
@@ -166,24 +167,30 @@ class MeshRoutingManager(
             seenMessageIds.add(packet.messageId)
         }
 
-        // 3. Handle ACK packets
+        // 3. Handle ACK packets — ACK itself may need multi-hop routing back to origin.
         if (packet.type == PacketType.ACK) {
             val targetMsgId = packet.text.removePrefix("ACK:")
             Log.i(TAG, "Received ACK for message: $targetMsgId from ${packet.senderId}")
-            
-            // Mark message acknowledged in outbox (memory + disk)
-            outboxQueue.find { it.packet.messageId == targetMsgId }?.let {
-                it.isAcknowledged = true
-                outboxQueue.remove(it)
-            }
-            val dao = outboxDao
-            if (dao != null) {
-                coroutineScope.launch {
-                    try { dao.delete(targetMsgId) } catch (e: Exception) { /* ignore */ }
+
+            // Am I the target of this ACK? (i.e. I am the original sender)
+            if (packet.recipientId == "*" || packet.recipientId.equals(myNodeId, ignoreCase = true)) {
+                // ACK is for me: mark as acknowledged and consume.
+                outboxQueue.find { it.packet.messageId == targetMsgId }?.let {
+                    it.isAcknowledged = true
+                    outboxQueue.remove(it)
                 }
+                val dao = outboxDao
+                if (dao != null) {
+                    coroutineScope.launch {
+                        try { dao.delete(targetMsgId) } catch (e: Exception) { /* ignore */ }
+                    }
+                }
+                deliveryTracker?.update(targetMsgId, DeliveryStatus.ACKNOWLEDGED)
+                pendingAcks[targetMsgId]?.complete(true)
+                return
             }
-            deliveryTracker?.update(targetMsgId, DeliveryStatus.ACKNOWLEDGED)
-            pendingAcks[targetMsgId]?.complete(true)
+            // ACK is NOT for me: I am a relay. Forward it via routing table toward original sender.
+            forwardPacketViaRoute(packet)
             return
         }
 
@@ -207,29 +214,56 @@ class MeshRoutingManager(
         if (isForMe) {
             Log.i(TAG, "Packet ${packet.messageId} delivered locally to $myNodeId")
             deliveryTracker?.track(packet, DeliveryStatus.DELIVERED, packet.hopCount)
-            
-            // Automatically send ACK back to sender if unicast
+
+            // Phase 8: ACK must route back through routing table, NOT via raw sendPacket.
             if (packet.recipientId != "*" && !packet.isGroupOrZone) {
                 val ackPacket = packet.createAckPacket(myNodeId)
-                transportLayer.sendPacket(ackPacket)
-                Log.i(TAG, "Dispatched ACK back to ${packet.senderId} for ${packet.messageId}")
+                // Queue ACK via the routing table so it hops back A ← R1 ← R2 ← B
+                sendReliablePacket(ackPacket)
+                Log.i(TAG, "ACK for ${packet.messageId} queued via routing table (back to ${packet.senderId})")
             }
 
             // Decrypt payload for local consumption
             val decryptedPacket = packet.withDecryption()
             onLocalDeliver(decryptedPacket)
         } else {
-            // 5. Multi-Hop Intermediate Relay Forwarding (route-aware)
-            if (packet.hopCount < packet.maxHops) {
-                // Try to use the routing table for a better next hop than blind relay.
-                val routeNextHop = discoverRoute(packet.recipientId)
-                val relayPacket = packet.createForwardedPacket()
-                Log.i(TAG, "Relaying packet ${packet.messageId} (hop ${relayPacket.hopCount}/${packet.maxHops}) to destination ${packet.recipientId}" +
-                        (if (routeNextHop != null) " via $routeNextHop" else " (broadcast relay)"))
-                sendReliablePacket(relayPacket)
-            } else {
-                Log.w(TAG, "Packet ${packet.messageId} dropped: Max hops (${packet.maxHops}) reached")
-            }
+            // 5. Multi-Hop Intermediate Relay Forwarding — route-aware, next-hop targeted.
+            forwardPacketViaRoute(packet)
+        }
+    }
+
+    /**
+     * Phase 6 + 13: Forward a packet toward its destination using the routing table.
+     * Next-hop targeted (sendToPeer), with loop prevention (hopCount/maxHops check already
+     * done by dedup cache + TTL).
+     */
+    private fun forwardPacketViaRoute(packet: TextPacket) {
+        if (packet.hopCount >= packet.maxHops) {
+            Log.w(TAG, "Packet ${packet.messageId} dropped: max hops (${packet.maxHops}) reached (hop=${packet.hopCount})")
+            deliveryTracker?.update(packet.messageId, DeliveryStatus.FAILED, packet.hopCount)
+            return
+        }
+
+        val relayPacket = packet.createForwardedPacket()
+
+        // Route-aware next-hop selection
+        val routeNextHop = discoverRoute(packet.recipientId)
+        val sent = if (routeNextHop != null) {
+            // Phase 6: send to specific next-hop peer, not broadcast.
+            Log.i(TAG, "Relaying ${packet.messageId} (hop ${relayPacket.hopCount}/${relayPacket.maxHops}) → via $routeNextHop")
+            sendToPeer(routeNextHop, relayPacket)
+        } else {
+            // No route: fall back to broadcast (hope a neighbor forwards it).
+            Log.w(TAG, "Relaying ${packet.messageId} (hop ${relayPacket.hopCount}/${relayPacket.maxHops}) → BROADCAST (no route)")
+            sendDirectPacket(relayPacket)
+        }
+
+        if (sent) {
+            deliveryTracker?.update(packet.messageId, DeliveryStatus.FORWARDED, relayPacket.hopCount)
+            discovery?.markDeliverySuccess(packet.recipientId, routeNextHop)
+        } else {
+            deliveryTracker?.update(packet.messageId, DeliveryStatus.FAILED, relayPacket.hopCount)
+            discovery?.markDeliveryFailure(packet.recipientId, routeNextHop)
         }
     }
 
@@ -260,7 +294,15 @@ class MeshRoutingManager(
                     item.retryCount++
                     Log.i(TAG, "Transmitting queued packet ${item.packet.messageId} (Attempt ${item.retryCount}/${item.maxRetries})")
                     deliveryTracker?.update(item.packet.messageId, DeliveryStatus.FORWARDING, item.packet.hopCount)
-                    val sent = transportLayer.sendPacket(item.packet)
+
+                    // Phase 6: route-aware send — next-hop targeted if available
+                    val routeNextHop = discoverRoute(item.packet.recipientId)
+                    val sent = if (routeNextHop != null) {
+                        sendToPeer(routeNextHop, item.packet)
+                    } else {
+                        sendDirectPacket(item.packet)
+                    }
+
                     if (sent && item.packet.recipientId == "*") {
                         // Broadcast packets don't expect ACKs
                         iterator.remove()
@@ -295,20 +337,26 @@ class MeshRoutingManager(
         }
     }
 
+    /** Phase 6: Send a packet to a specific next-hop peer node ID. */
+    private fun sendToPeer(nodeId: String, packet: TextPacket): Boolean {
+        return transportLayer.sendToPeer(nodeId, packet)
+    }
+
+    /** Fallback: send via any connected transport (broadcast / unknown peer). */
+    private fun sendDirectPacket(packet: TextPacket): Boolean {
+        return transportLayer.sendPacket(packet)
+    }
+
     fun getOutboxSize(): Int = outboxQueue.size
 
     /**
      * Look up a known route to a destination in the discovery routing table.
-     * Returns the next-hop node ID, or null if no route is known (blind relay).
+     * Returns the next-hop node ID (the directly-reachable neighbor), or null
+     * if no valid route is known (blind relay fallback).
      */
     private fun discoverRoute(destinationId: String): String? {
         val d = discovery ?: return null
-        val route = d.routes[destinationId] ?: return null
-        if (route.expiryMs < System.currentTimeMillis()) {
-            d.routes.remove(destinationId)
-            return null
-        }
-        return route.nextHopId
+        return d.bestNextHop(destinationId)
     }
 
     /** Snapshot of the current outbox contents (for UI delivery visibility). */

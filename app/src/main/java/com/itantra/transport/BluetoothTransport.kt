@@ -20,7 +20,11 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * RFCOMM Bluetooth Classic Transport for offline phone-to-phone communication.
+ * RFCOMM Bluetooth Classic Transport supporting multiple simultaneous peer
+ * connections. A relay node can maintain connections to A and B at the same time.
+ *
+ * The server socket stays open after each accept to allow additional peers.
+ * Each peer connection is tracked independently.
  */
 class BluetoothTransport(
     private val context: Context,
@@ -38,21 +42,26 @@ class BluetoothTransport(
         private set
 
     private var serverSocket: BluetoothServerSocket? = null
-    private var activeSocket: BluetoothSocket? = null
-    private var dataInputStream: DataInputStream? = null
-    private var dataOutputStream: DataOutputStream? = null
+
+    /** Per-peer connections: address -> PeerConnection */
+    private val peerConnections = ConcurrentHashMap<String, ActivePeer>()
 
     private var onPacketCallback: ((TextPacket) -> Unit)? = null
     private var onStateCallback: ((ConnectionState) -> Unit)? = null
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var listenerJob: Job? = null
-    private var receiverJob: Job? = null
 
     private val codec = BinaryPacketCodec()
 
-    // Deduplication cache for received message IDs
-    private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
+    private data class ActivePeer(
+        val address: String,
+        var socket: BluetoothSocket,
+        var dataIn: DataInputStream,
+        var dataOut: DataOutputStream,
+        var readerJob: Job? = null,
+        var nodeId: String? = null
+    )
 
     @SuppressLint("MissingPermission")
     override fun startListening(
@@ -73,18 +82,15 @@ class BluetoothTransport(
             try {
                 serverSocket?.close()
                 serverSocket = bluetoothAdapter.listenUsingRfcommWithServiceRecord(SERVICE_NAME, APP_UUID)
-                Log.i(TAG, "RFCOMM server listening for incoming connection...")
+                Log.i(TAG, "RFCOMM server listening for incoming connections...")
 
                 while (isActive) {
                     try {
-                        val socket = serverSocket?.accept()
-                        if (socket != null) {
-                            Log.i(TAG, "Incoming Bluetooth connection accepted from: ${socket.remoteDevice?.name}")
-                            serverSocket?.close()
-                            serverSocket = null
-                            handleConnectedSocket(socket)
-                            break
-                        }
+                        val socket = serverSocket?.accept() ?: break
+                        val addr = socket.remoteDevice?.address ?: "unknown"
+                        Log.i(TAG, "Incoming Bluetooth connection from: ${socket.remoteDevice?.name} ($addr)")
+                        handleNewPeer(socket, addr)
+                        // DO NOT close serverSocket — keep accepting more peers
                     } catch (e: IOException) {
                         if (!isActive) break
                         Log.w(TAG, "Server socket accept interrupted", e)
@@ -105,9 +111,8 @@ class BluetoothTransport(
             return
         }
 
-        val found = linkedMapOf<String, DeviceInfo>() // dedupe by address, keep order
+        val found = linkedMapOf<String, DeviceInfo>()
 
-        // 1. Always include paired/bonded devices.
         bluetoothAdapter.bondedDevices?.forEach { dev ->
             found[dev.address] = DeviceInfo(
                 id = dev.address,
@@ -117,7 +122,6 @@ class BluetoothTransport(
             )
         }
 
-        // If already discovering, cancel to restart cleanly.
         try { bluetoothAdapter.cancelDiscovery() } catch (_: Exception) {}
 
         val receiver = object : BroadcastReceiver() {
@@ -141,13 +145,12 @@ class BluetoothTransport(
         val discoveryOk = bluetoothAdapter.startDiscovery()
         Log.i(TAG, "Bluetooth discovery started: $discoveryOk")
 
-        // Collect for a limited window, then report and stop discovery.
         coroutineScope.launch {
             delay(8000)
             try { context.unregisterReceiver(receiver) } catch (_: Exception) {}
             try { bluetoothAdapter.cancelDiscovery() } catch (_: Exception) {}
             onDevicesFound(found.values.toList())
-            Log.i(TAG, "Bluetooth discovery found ${found.size} in-range device(s)")
+            Log.i(TAG, "Bluetooth discovery found ${found.size} device(s)")
         }
     }
 
@@ -164,7 +167,6 @@ class BluetoothTransport(
                 bluetoothAdapter.cancelDiscovery()
                 val btDevice: BluetoothDevice = bluetoothAdapter.getRemoteDevice(device.address)
 
-                // If not yet paired, initiate bonding and wait for it to complete.
                 if (btDevice.bondState != BluetoothDevice.BOND_BONDED) {
                     if (!bond(btDevice)) {
                         Log.e(TAG, "Pairing with ${device.name} failed")
@@ -177,21 +179,21 @@ class BluetoothTransport(
                 val socket = btDevice.createRfcommSocketToServiceRecord(APP_UUID)
                 socket.connect()
 
-                Log.i(TAG, "Successfully connected to ${device.name} (${device.address})")
-                handleConnectedSocket(socket)
+                Log.i(TAG, "Connected to ${device.name} (${device.address})")
+                handleNewPeer(socket, device.address)
+                updateState(ConnectionState.CONNECTED)
                 withContext(Dispatchers.Main) { onResult(true) }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to connect to Bluetooth device ${device.address}", e)
+                Log.e(TAG, "Failed to connect to ${device.address}", e)
                 updateState(ConnectionState.ERROR)
                 withContext(Dispatchers.Main) { onResult(false) }
             }
         }
     }
 
-    /** Initiate pairing and wait (up to 15s) for BOND_BONDED. */
     @SuppressLint("MissingPermission")
     private suspend fun bond(device: BluetoothDevice): Boolean = withContext(Dispatchers.IO) {
-        val bonded = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        val bonded = CompletableDeferred<Boolean>()
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(c: Context?, intent: Intent?) {
                 if (intent?.action == BluetoothDevice.ACTION_BOND_STATE_CHANGED) {
@@ -199,11 +201,8 @@ class BluetoothTransport(
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     if (d != null && d.address == device.address) {
                         val state = intent.getIntExtra(BluetoothDevice.EXTRA_BOND_STATE, -1)
-                        if (state == BluetoothDevice.BOND_BONDED) {
-                            bonded.complete(true)
-                        } else if (state == BluetoothDevice.BOND_NONE) {
-                            bonded.complete(false)
-                        }
+                        if (state == BluetoothDevice.BOND_BONDED) bonded.complete(true)
+                        else if (state == BluetoothDevice.BOND_NONE) bonded.complete(false)
                     }
                 }
             }
@@ -215,25 +214,27 @@ class BluetoothTransport(
         ok && result
     }
 
-    private fun handleConnectedSocket(socket: BluetoothSocket) {
-        activeSocket = socket
-        dataInputStream = DataInputStream(socket.inputStream)
-        dataOutputStream = DataOutputStream(socket.outputStream)
+    private fun handleNewPeer(socket: BluetoothSocket, address: String) {
+        val peer = ActivePeer(
+            address = address,
+            socket = socket,
+            dataIn = DataInputStream(socket.inputStream),
+            dataOut = DataOutputStream(socket.outputStream)
+        )
+        peerConnections[address] = peer
         updateState(ConnectionState.CONNECTED)
 
-        receiverJob?.cancel()
-        receiverJob = coroutineScope.launch {
-            val dis = dataInputStream ?: return@launch
-            while (isActive && isConnected()) {
+        peer.readerJob = coroutineScope.launch {
+            val dis = peer.dataIn
+            while (isActive && socket.isConnected) {
                 try {
                     val length = dis.readInt()
                     if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
                         val packet = codec.decode(buffer)
-
-                        if (packet != null && seenMessageIds.add(packet.messageId)) {
-                            Log.i(TAG, "Received valid packet: id=${packet.messageId} lang=${packet.language}")
+                        if (packet != null) {
+                            peer.nodeId = packet.senderId
                             withContext(Dispatchers.Main) {
                                 onPacketCallback?.invoke(packet)
                             }
@@ -241,8 +242,12 @@ class BluetoothTransport(
                     }
                 } catch (e: Exception) {
                     if (isActive) {
-                        Log.w(TAG, "Bluetooth connection lost", e)
-                        disconnect()
+                        Log.w(TAG, "Bluetooth peer $address connection lost", e)
+                        peerConnections.remove(address)
+                        updateState(
+                            if (peerConnections.isEmpty()) ConnectionState.DISCONNECTED
+                            else ConnectionState.CONNECTED
+                        )
                     }
                     break
                 }
@@ -252,49 +257,71 @@ class BluetoothTransport(
 
     @Synchronized
     override fun sendPacket(packet: TextPacket): Boolean {
-        if (!isConnected()) {
-            Log.w(TAG, "Cannot send packet: Not connected")
+        if (peerConnections.isEmpty()) {
+            Log.w(TAG, "Cannot send packet: no connected peers")
             return false
         }
+        var anySent = false
+        for ((_, peer) in peerConnections) {
+            if (peer.socket.isConnected) {
+                try {
+                    val dos = peer.dataOut
+                    val bytes = codec.encode(packet)
+                    dos.writeInt(bytes.size)
+                    dos.write(bytes)
+                    dos.flush()
+                    anySent = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to send to peer ${peer.address}", e)
+                }
+            }
+        }
+        return anySent
+    }
 
+    /**
+     * Send to a specific peer by node ID. Resolves the peer's BT address
+     * from the packet's sender ID mapping.
+     */
+    override fun sendToPeer(nodeId: String, packet: TextPacket): Boolean {
+        val peer = peerConnections.values.find { it.nodeId == nodeId }
+        if (peer == null || !peer.socket.isConnected) {
+            Log.w(TAG, "Cannot send to BT peer $nodeId: not connected")
+            return false
+        }
         return try {
-            val dos = dataOutputStream ?: return false
+            val dos = peer.dataOut
             val bytes = codec.encode(packet)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()
-            Log.i(TAG, "Sent packet: id=${packet.messageId} size=${bytes.size}B text=\"${packet.text}\"")
+            Log.d(TAG, "Sent to BT peer $nodeId (${bytes.size}B)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send packet over Bluetooth", e)
-            disconnect()
+            Log.e(TAG, "Failed to send to BT peer $nodeId", e)
+            peerConnections.remove(peer.address)
             false
         }
     }
 
     @Synchronized
     override fun disconnect() {
-        receiverJob?.cancel()
         listenerJob?.cancel()
-        try {
-            dataInputStream?.close()
-            dataOutputStream?.close()
-            activeSocket?.close()
-            serverSocket?.close()
-        } catch (e: Exception) {
-            // Ignore
-        } finally {
-            activeSocket = null
-            serverSocket = null
-            dataInputStream = null
-            dataOutputStream = null
-            updateState(ConnectionState.DISCONNECTED)
+        for ((addr, peer) in peerConnections) {
+            peer.readerJob?.cancel()
+            try {
+                peer.dataIn.close()
+                peer.dataOut.close()
+                peer.socket.close()
+            } catch (_: Exception) {}
         }
+        peerConnections.clear()
+        try { serverSocket?.close() } catch (_: Exception) {}
+        serverSocket = null
+        updateState(ConnectionState.DISCONNECTED)
     }
 
-    override fun isConnected(): Boolean {
-        return connectionState == ConnectionState.CONNECTED && activeSocket?.isConnected == true
-    }
+    override fun isConnected(): Boolean = peerConnections.values.any { it.socket.isConnected }
 
     private fun updateState(state: ConnectionState) {
         connectionState = state

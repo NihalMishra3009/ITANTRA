@@ -56,7 +56,7 @@ class NetworkActivity : AppCompatActivity() {
         }
 
         // --- Routing table ---
-        val routes = discovery?.routes?.values ?: emptyList()
+        val routes = discovery?.getAllRoutes() ?: emptyList()
         binding.tvRoutes.text = if (routes.isEmpty()) {
             "No routes learned yet (learned via ROUTE_REQUEST/RESPONSE and NODE_ANNOUNCE)"
         } else {

@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.net.wifi.p2p.WifiP2pConfig
 import android.net.wifi.p2p.WifiP2pDevice
-import android.net.wifi.p2p.WifiP2pInfo
 import android.net.wifi.p2p.WifiP2pManager
 import android.os.Looper
 import android.util.Log
@@ -22,7 +21,11 @@ import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Wi-Fi Direct (P2P) Transport using local TCP sockets for high-bandwidth offline communication.
+ * Wi-Fi Direct (P2P) Transport supporting multiple simultaneous TCP peer
+ * connections. A relay node can maintain connections to multiple peers.
+ *
+ * The server socket stays open to accept additional incoming connections.
+ * Each peer is tracked independently.
  */
 class WifiDirectTransport(
     private val context: Context
@@ -41,18 +44,24 @@ class WifiDirectTransport(
     private val channel: WifiP2pManager.Channel? = wifiP2pManager?.initialize(context, Looper.getMainLooper(), null)
 
     private var serverSocket: ServerSocket? = null
-    private var clientSocket: Socket? = null
-    private var dataInputStream: DataInputStream? = null
-    private var dataOutputStream: DataOutputStream? = null
+
+    private val peerConnections = ConcurrentHashMap<String, ActivePeer>()
 
     private var onPacketCallback: ((TextPacket) -> Unit)? = null
     private var onStateCallback: ((ConnectionState) -> Unit)? = null
 
     private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var serverJob: Job? = null
-    private var receiverJob: Job? = null
-    private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val codec = BinaryPacketCodec()
+
+    private data class ActivePeer(
+        val address: String,
+        var socket: Socket,
+        var dataIn: DataInputStream,
+        var dataOut: DataOutputStream,
+        var readerJob: Job? = null,
+        var nodeId: String? = null
+    )
 
     @SuppressLint("MissingPermission")
     override fun startListening(
@@ -70,12 +79,11 @@ class WifiDirectTransport(
                 Log.i(TAG, "Wi-Fi Direct TCP Server listening on port $SERVER_PORT")
 
                 while (isActive) {
-                    val socket = serverSocket?.accept()
-                    if (socket != null) {
-                        Log.i(TAG, "Incoming TCP connection accepted from ${socket.inetAddress.hostAddress}")
-                        handleConnectedSocket(socket)
-                        break
-                    }
+                    val socket = serverSocket?.accept() ?: break
+                    val addr = socket.inetAddress?.hostAddress ?: "unknown"
+                    Log.i(TAG, "Incoming TCP connection from $addr")
+                    handleNewPeer(socket, addr)
+                    // DO NOT close serverSocket — keep accepting more peers
                 }
             } catch (e: Exception) {
                 if (isActive) {
@@ -136,25 +144,23 @@ class WifiDirectTransport(
         manager.connect(ch, config, object : WifiP2pManager.ActionListener {
             override fun onSuccess() {
                 Log.i(TAG, "Connecting to Wi-Fi Direct peer ${device.address}...")
-                // Wait for group negotiation, then discover the group owner IP.
-                // NOTE: device.address is the P2P MAC — NOT a TCP IP. We must read
-                // the real group IPv4 from WifiP2pInfo.groupOwnerAddress.
                 coroutineScope.launch {
-                    delay(2500) // Wait for group formation
+                    delay(2500)
                     try {
                         val ip = resolveGroupOwnerIp(manager, ch)
                         if (ip == null) {
-                            Log.e(TAG, "Could not resolve group owner IP for Wi-Fi Direct")
+                            Log.e(TAG, "Could not resolve group owner IP")
                             updateState(ConnectionState.ERROR)
                             withContext(Dispatchers.Main) { onResult(false) }
                             return@launch
                         }
                         val socket = Socket()
                         socket.connect(InetSocketAddress(ip, SERVER_PORT), 8000)
-                        handleConnectedSocket(socket)
+                        handleNewPeer(socket, device.address)
+                        updateState(ConnectionState.CONNECTED)
                         withContext(Dispatchers.Main) { onResult(true) }
                     } catch (e: Exception) {
-                        Log.e(TAG, "Failed TCP handshake with Wi-Fi Direct peer", e)
+                        Log.e(TAG, "Failed TCP handshake", e)
                         updateState(ConnectionState.ERROR)
                         withContext(Dispatchers.Main) { onResult(false) }
                     }
@@ -169,10 +175,6 @@ class WifiDirectTransport(
         })
     }
 
-    /**
-     * Resolve the Wi-Fi Direct group owner's IPv4 address from WifiP2pInfo.
-     * The group owner is the device that opened the TCP server.
-     */
     @SuppressLint("MissingPermission")
     private suspend fun resolveGroupOwnerIp(
         manager: WifiP2pManager,
@@ -182,40 +184,38 @@ class WifiDirectTransport(
         try {
             manager.requestConnectionInfo(ch) { info ->
                 val goAddr = info.groupOwnerAddress?.hostAddress
-                if (goAddr != null) {
-                    result = when {
-                        info.groupFormed && goAddr != "0.0.0.0" -> goAddr
-                        else -> "192.168.49.1" // standard P2P GO subnet
-                    }
+                if (goAddr != null && info.groupFormed && goAddr != "0.0.0.0") {
+                    result = goAddr
                 }
             }
-            // give the async callback a moment; otherwise fall back to standard GO IP
             delay(800)
         } catch (e: Exception) {
             Log.w(TAG, "requestConnectionInfo failed", e)
         }
-        result ?: "192.168.49.1"
+        result
     }
 
-    private fun handleConnectedSocket(socket: Socket) {
-        clientSocket = socket
-        dataInputStream = DataInputStream(socket.getInputStream())
-        dataOutputStream = DataOutputStream(socket.getOutputStream())
+    private fun handleNewPeer(socket: Socket, address: String) {
+        val peer = ActivePeer(
+            address = address,
+            socket = socket,
+            dataIn = DataInputStream(socket.getInputStream()),
+            dataOut = DataOutputStream(socket.getOutputStream())
+        )
+        peerConnections[address] = peer
         updateState(ConnectionState.CONNECTED)
 
-        receiverJob?.cancel()
-        receiverJob = coroutineScope.launch {
-            val dis = dataInputStream ?: return@launch
-            while (isActive && isConnected()) {
+        peer.readerJob = coroutineScope.launch {
+            val dis = peer.dataIn
+            while (isActive && socket.isConnected) {
                 try {
                     val length = dis.readInt()
                     if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
                         val packet = codec.decode(buffer)
-
-                        if (packet != null && seenMessageIds.add(packet.messageId)) {
-                            Log.i(TAG, "Received Wi-Fi Direct packet: ${packet.messageId}")
+                        if (packet != null) {
+                            peer.nodeId = packet.senderId
                             withContext(Dispatchers.Main) {
                                 onPacketCallback?.invoke(packet)
                             }
@@ -223,8 +223,12 @@ class WifiDirectTransport(
                     }
                 } catch (e: Exception) {
                     if (isActive) {
-                        Log.w(TAG, "Wi-Fi Direct connection closed", e)
-                        disconnect()
+                        Log.w(TAG, "WiFi peer $address connection lost", e)
+                        peerConnections.remove(address)
+                        updateState(
+                            if (peerConnections.isEmpty()) ConnectionState.DISCONNECTED
+                            else ConnectionState.CONNECTED
+                        )
                     }
                     break
                 }
@@ -234,46 +238,64 @@ class WifiDirectTransport(
 
     @Synchronized
     override fun sendPacket(packet: TextPacket): Boolean {
-        if (!isConnected()) return false
+        if (peerConnections.isEmpty()) return false
+        var anySent = false
+        for ((_, peer) in peerConnections) {
+            if (peer.socket.isConnected) {
+                try {
+                    val dos = peer.dataOut
+                    val bytes = codec.encode(packet)
+                    dos.writeInt(bytes.size)
+                    dos.write(bytes)
+                    dos.flush()
+                    anySent = true
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to send to WiFi peer ${peer.address}", e)
+                }
+            }
+        }
+        return anySent
+    }
 
+    override fun sendToPeer(nodeId: String, packet: TextPacket): Boolean {
+        val peer = peerConnections.values.find { it.nodeId == nodeId }
+        if (peer == null || !peer.socket.isConnected) {
+            Log.w(TAG, "Cannot send to WiFi peer $nodeId: not connected")
+            return false
+        }
         return try {
-            val dos = dataOutputStream ?: return false
+            val dos = peer.dataOut
             val bytes = codec.encode(packet)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()
-            Log.i(TAG, "Sent Wi-Fi Direct packet: ${packet.messageId}")
+            Log.d(TAG, "Sent to WiFi peer $nodeId (${bytes.size}B)")
             true
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to send packet over Wi-Fi Direct", e)
-            disconnect()
+            Log.e(TAG, "Failed to send to WiFi peer $nodeId", e)
+            peerConnections.remove(peer.address)
             false
         }
     }
 
     @Synchronized
     override fun disconnect() {
-        receiverJob?.cancel()
         serverJob?.cancel()
-        try {
-            dataInputStream?.close()
-            dataOutputStream?.close()
-            clientSocket?.close()
-            serverSocket?.close()
-        } catch (e: Exception) {
-            // Ignore
-        } finally {
-            clientSocket = null
-            serverSocket = null
-            dataInputStream = null
-            dataOutputStream = null
-            updateState(ConnectionState.DISCONNECTED)
+        for ((addr, peer) in peerConnections) {
+            peer.readerJob?.cancel()
+            try {
+                peer.dataIn.close()
+                peer.dataOut.close()
+                peer.socket.close()
+            } catch (_: Exception) {}
         }
+        peerConnections.clear()
+        try { serverSocket?.close() } catch (_: Exception) {}
+        serverSocket = null
+        updateState(ConnectionState.DISCONNECTED)
     }
 
-    override fun isConnected(): Boolean {
-        return connectionState == ConnectionState.CONNECTED && clientSocket?.isConnected == true
-    }
+    override fun isConnected(): Boolean = peerConnections.values.any { it.socket.isConnected }
 
     private fun updateState(state: ConnectionState) {
         connectionState = state

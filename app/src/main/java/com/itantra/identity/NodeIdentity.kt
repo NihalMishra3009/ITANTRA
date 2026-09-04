@@ -55,14 +55,18 @@ object NodeIdentity {
 
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+        // Correct lifecycle: persist the Node ID FIRST (before keypair/profile),
+        // so it is durable the instant it is created and survives any subsequent
+        // crash/restart before the profile object is fully built.
         var nodeId = prefs.getString(KEY_NODE_ID, null)
         if (nodeId == null) {
             nodeId = generateNodeId()
-            // Persist keypair along with first-time node creation
-            ensureKeyPair(context)
-        } else {
-            ensureKeyPair(context)
+            prefs.edit().putString(KEY_NODE_ID, nodeId).apply()
         }
+        // Node ID now guaranteed durable in prefs.
+
+        // Generate/load the identity keypair (idempotent; uses durable node id).
+        ensureKeyPair(context, nodeId)
 
         val displayName = prefs.getString(KEY_DISPLAY_NAME, null)
             ?: ("Node-" + nodeId.substringAfter("ITN-").take(4)).also {
@@ -128,7 +132,7 @@ object NodeIdentity {
         return "ITN-$hex"
     }
 
-    private fun ensureKeyPair(context: Context) {
+    private fun ensureKeyPair(context: Context, nodeId: String) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_PUB, null) != null) return
         val (pubB64, privB64) = MessageSecurityManager.generatePersistentKeyPairBase64()
@@ -136,7 +140,7 @@ object NodeIdentity {
             .putString(KEY_PUB, pubB64)
             .putString(KEY_PRIV, privB64)
             .putLong(KEY_CREATED, System.currentTimeMillis())
-            .putString(KEY_NODE_ID, profile?.nodeId) // ensure node id set
+            .putString(KEY_NODE_ID, nodeId) // durable node id
             .apply()
     }
 }

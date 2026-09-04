@@ -108,9 +108,61 @@ class TextPacketTest {
         assertEquals("hi", decoded.language)
         assertEquals(77, decoded.sequence)
         assertEquals(text, decoded.text)
-        // VERSION 3 must preserve sender/recipient for multi-hop routing
+        // VERSION 4+ preserves sender/recipient AND the exact message id
         assertEquals("ITN-AAAA11", decoded.senderId)
         assertEquals("ITN-B91C", decoded.recipientId)
+        assertEquals("abc12345", decoded.messageId)
+    }
+
+    @Test
+    fun testMessageIdSurvivesMultiHopEncodeDecode() {
+        // Phase 2 requirement: the exact message id must not change across
+        // encode -> decode -> (relay) -> decode -> destination.
+        val codec = BinaryPacketCodec()
+        val originalId = "7f3a9c21" // realistic UUID-substring id
+
+        val senderPacket = TextPacket(
+            messageId = originalId,
+            senderId = "ITN-A111",
+            recipientId = "ITN-D999",
+            type = PacketType.DATA,
+            language = "hi",
+            text = "मुझे मदद चाहिए"
+        )
+
+        // Relay 1: encode on A, decode on R1
+        val atR1 = codec.decode(codec.encode(senderPacket))!!
+        assertEquals("Exact id must survive first hop", originalId, atR1.messageId)
+
+        // Relay relays: same id, hopCount increments (createForwardedPacket)
+        val atR1Forwarded = atR1.copy(messageId = atR1.messageId, hopCount = atR1.hopCount + 1)
+        // Relay 2: encode on R1, decode on R2
+        val atR2 = codec.decode(codec.encode(atR1Forwarded))!!
+        assertEquals("Exact id must survive second hop", originalId, atR2.messageId)
+
+        // Destination: decode after final relay
+        val dest = codec.decode(codec.encode(atR2.copy(messageId = atR2.messageId, hopCount = atR2.hopCount + 1)))!!
+        assertEquals("Exact id must survive to destination", originalId, dest.messageId)
+    }
+
+    @Test
+    fun testAckCarriesExactMessageId() {
+        val codec = BinaryPacketCodec()
+        val originalId = "cafe1234"
+        val data = TextPacket(
+            messageId = originalId,
+            senderId = "ITN-A111",
+            recipientId = "ITN-B222",
+            type = PacketType.DATA,
+            language = "hi",
+            text = "help"
+        )
+        val ack = data.createAckPacket("ITN-B222")
+        assertEquals("ack_$originalId", ack.messageId)
+
+        // ACK round-trips through the codec preserving its own (exact) id
+        val decodedAck = codec.decode(codec.encode(ack))!!
+        assertEquals("ack_$originalId", decodedAck.messageId)
     }
 
     @Test

@@ -10,40 +10,38 @@ import java.nio.charset.StandardCharsets
  *
  * Replaces JSON/Base64 overhead with a header + payload.
  *
- * VERSION 3 adds length-prefixed SENDER_ID and RECIPIENT_ID so multi-hop
- * routing can correctly identify origin and destination (VERSION 2 dropped
- * these, which broke true store-forward relay).
+ * VERSION 4 transmits the EXACT message ID as a length-prefixed UTF-8 string
+ * (no lossy hash). VERSION 3 added sender/recipient IDs. The exact message id
+ * is required so deduplication, outbox, retry, ACK, delivery tracking,
+ * forwarding and diagnostics all reference the identical identifier.
  *
  * Layout (big-endian unless noted):
  *   OFFSET  SIZE  FIELD
  *   0       2     MAGIC 0x49 0x54 ("IT")
- *   2       1     VERSION (3)
+ *   2       1     VERSION (4)
  *   3       1     TYPE            -> PacketType ordinal byte
  *   4       1     LANGUAGE        -> index into LanguageIndex map (0..9)
  *   5       1     FLAGS           bit0=encrypted, bit1=alert, bit2=priority
  *   6       2     SEQUENCE        network order (16-bit)
- *   8       4     MSG_ID          network order (hash of message id, 32-bit)
- *   12      8     TIMESTAMP ms epoch
- *   20      1     HOP_COUNT
- *   21      1     MAX_HOPS
- *   22      4     TTL_MS          (seconds, 32-bit)
- *   26      1     SENDER_LEN      bytes of sender id
- *   27      S     SENDER_ID       UTF-8 node id
- *   27+S    1     RECIP_LEN       bytes of recipient id
- *   28+S    R     RECIPIENT_ID    UTF-8 node id (or "*")
- *   28+S+R  2     PAYLOAD_LEN     (network order)
- *   30+S+R  N     PAYLOAD         (UTF-8 text, or encrypted payload string bytes)
+ *   8       4     MSG_ID_LEN      length of the UTF-8 message-id string
+ *   12      N     MESSAGE_ID      exact UTF-8 message id
+ *   12+N    8     TIMESTAMP ms epoch
+ *   20+N    1     SENDER_LEN      bytes of sender id
+ *   21+N    S     SENDER_ID       UTF-8 node id
+ *   21+N+S  1     RECIP_LEN       bytes of recipient id
+ *   22+N+S  R     RECIPIENT_ID    UTF-8 node id (or "*")
+ *   22+N+S+R  2   PAYLOAD_LEN     (network order)
+ *   24+N+S+R  P   PAYLOAD         (UTF-8 text, or encrypted payload string bytes)
  *   ...     32    AUTH_TAG        (HMAC-SHA256 over everything before tag)
  *
- * For a short Hindi message with 11-char node IDs this is ~90-110 bytes versus
- * ~500+ bytes for the equivalent JSON — still dramatically low-bitrate.
+ * VERSION 3 decode is kept for backward compatibility.
  */
 class BinaryPacketCodec {
 
     companion object {
         private const val MAGIC0 = 0x49
         private const val MAGIC1 = 0x54
-        private const val VERSION = 3
+        private const val VERSION = 4
         private const val AUTH_LEN = 32
 
         val LANG_INDEX = listOf("hi", "en", "gu", "mr", "kn", "ml", "ta", "te", "or", "bn")
@@ -57,6 +55,7 @@ class BinaryPacketCodec {
         val payloadBytes = packetPayloadBytes(packet)
         val langIdx = LANG_INDEX.indexOf(packet.language).coerceAtLeast(0)
 
+        val msgIdBytes = packet.messageId.toByteArray(StandardCharsets.UTF_8)
         val senderBytes = packet.senderId.toByteArray(StandardCharsets.UTF_8)
         val recipientBytes = packet.recipientId.toByteArray(StandardCharsets.UTF_8)
 
@@ -64,13 +63,16 @@ class BinaryPacketCodec {
                 (if (packet.isAlert) FLAG_ALERT else 0) or
                 (if (packet.type == PacketType.EMERGENCY) FLAG_PRIORITY else 0)
 
-        val msgIdHash = packet.messageId.hashCode()
         val ts = (packet.timestamp / 1000) * 1000L
         val ttlSecs = (packet.ttlMs / 1000).toInt().coerceAtMost(0x7FFFFFFF)
 
+        val msgIdLen = msgIdBytes.size.coerceAtMost(0x7FFFFFFF)
         val senderLen = senderBytes.size.coerceAtMost(0xFF)
         val recipientLen = recipientBytes.size.coerceAtMost(0xFF)
-        val totalLen = 30 + senderBytes.size + recipientBytes.size + payloadBytes.size + AUTH_LEN
+        // Fixed: magic(2)+version(1)+type(1)+lang(1)+flags(1)+seq(2) =8
+        //        +msgIdLen(4)+timestamp(8)+hop(1)+maxhop(1)+ttl(4)=18 -> 26
+        //        +senderLen(1)+recipLen(1)+payloadLen(2)=4 -> 30
+        val totalLen = 30 + msgIdBytes.size + senderBytes.size + recipientBytes.size + payloadBytes.size + AUTH_LEN
         val buf = ByteBuffer.allocate(totalLen).order(ByteOrder.BIG_ENDIAN)
 
         buf.put(MAGIC0.toByte())
@@ -80,7 +82,8 @@ class BinaryPacketCodec {
         buf.put(langIdx.toByte())
         buf.put(flags.toByte())
         buf.putShort(packet.sequence.toShort())
-        buf.putInt(msgIdHash)
+        buf.putInt(msgIdLen)
+        buf.put(msgIdBytes)
         buf.putLong(ts)
         buf.put(packet.hopCount.toByte())
         buf.put(packet.maxHops.toByte())
@@ -111,9 +114,10 @@ class BinaryPacketCodec {
             val buf = ByteBuffer.wrap(bytes).order(ByteOrder.BIG_ENDIAN)
 
             if (buf.get().toInt() and 0xFF != MAGIC0 || buf.get().toInt() and 0xFF != MAGIC1) return null
-            when (buf.get().toInt() and 0xFF) {
+            when (val ver = buf.get().toInt() and 0xFF) {
                 2 -> return decodeV2(bytes, sessionKey)
-                3 -> { /* continue below */ }
+                3 -> return decodeV3(bytes, sessionKey)
+                4 -> { /* continue below */ }
                 else -> return null
             }
 
@@ -121,7 +125,10 @@ class BinaryPacketCodec {
             val langIdx = buf.get().toInt() and 0xFF
             val flags = buf.get().toInt() and 0xFF
             val seq = buf.short.toInt() and 0xFFFF
-            val sig = buf.int
+            val msgIdLen = buf.int
+            if (msgIdLen < 0 || msgIdLen > bytes.size) return null
+            val msgId = ByteArray(msgIdLen)
+            buf.get(msgId)
             val ts = buf.long
             val hopCount = buf.get().toInt() and 0xFF
             val maxHops = buf.get().toInt() and 0xFF
@@ -163,10 +170,78 @@ class BinaryPacketCodec {
             val isEncrypted = flags and FLAG_ENCRYPTED != 0
             val isAlert = flags and FLAG_ALERT != 0
 
-            val messageId = "%08x".format(sig)
-
             TextPacket(
                 version = VERSION,
+                messageId = String(msgId, StandardCharsets.UTF_8),
+                senderId = String(sender, StandardCharsets.UTF_8),
+                recipientId = String(recipient, StandardCharsets.UTF_8),
+                type = type,
+                language = language,
+                sequence = seq,
+                text = if (isEncrypted) "" else text,
+                encryptedPayload = if (isEncrypted) text else "",
+                isEncrypted = isEncrypted,
+                isAlert = isAlert,
+                timestamp = ts,
+                hopCount = hopCount,
+                maxHops = maxHops,
+                ttlMs = ttlSecs * 1000L
+            )
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Decode VERSION 3 (sender/recipient present, but message id was a 32-bit hash). */
+    private fun decodeV3(bytes: ByteArray, sessionKey: ByteArray?): TextPacket? {
+        return try {
+            if (bytes.size < 60) return null
+            val buf = ByteBuffer.wrap(bytes, 2, bytes.size - 2).order(ByteOrder.BIG_ENDIAN)
+            if (buf.get().toInt() and 0xFF != 3) return null
+
+            val typeOrd = buf.get().toInt() and 0xFF
+            val langIdx = buf.get().toInt() and 0xFF
+            val flags = buf.get().toInt() and 0xFF
+            val seq = buf.short.toInt() and 0xFFFF
+            val sig = buf.int
+            val ts = buf.long
+            val hopCount = buf.get().toInt() and 0xFF
+            val maxHops = buf.get().toInt() and 0xFF
+            val ttlSecs = buf.int
+
+            val senderLen = buf.get().toInt() and 0xFF
+            if (senderLen < 0 || senderLen > bytes.size) return null
+            val sender = ByteArray(senderLen)
+            buf.get(sender)
+            val recipientLen = buf.get().toInt() and 0xFF
+            if (recipientLen < 0 || senderLen + recipientLen + 2 > bytes.size) return null
+            val recipient = ByteArray(recipientLen)
+            buf.get(recipient)
+            val payloadLen = buf.short.toInt() and 0xFFFF
+            val payloadStart = buf.position()
+            if (payloadLen < 0 || payloadStart + payloadLen + AUTH_LEN > bytes.size) return null
+            val payload = ByteArray(payloadLen)
+            buf.get(payload)
+            val auth = ByteArray(32)
+            buf.get(auth)
+
+            val verifyKey = sessionKey ?: MessageSecurityManager.currentSessionKeyOrNull()
+            if (verifyKey != null) {
+                val preTagLen = payloadStart + payloadLen
+                val authData = bytes.copyOfRange(0, preTagLen)
+                val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(32)
+                if (!expected.contentEquals(auth)) return null
+            }
+
+            val type = PacketType.values().getOrNull(typeOrd) ?: return null
+            val language = LANG_INDEX.getOrNull(langIdx) ?: return null
+            val text = String(payload, StandardCharsets.UTF_8)
+            val isEncrypted = flags and FLAG_ENCRYPTED != 0
+            val isAlert = flags and FLAG_ALERT != 0
+            val messageId = "%08x".format(sig) // v3 reconstructed from hash (lossy)
+
+            TextPacket(
+                version = 3,
                 messageId = messageId,
                 senderId = String(sender, StandardCharsets.UTF_8),
                 recipientId = String(recipient, StandardCharsets.UTF_8),
@@ -189,7 +264,7 @@ class BinaryPacketCodec {
 
     /**
      * Decode a VERSION 2 packet (kept for backward compat). V2 did not carry
-     * sender/recipient IDs, so those default to "" / "*" as before.
+     * sender/recipient IDs or an exact message id.
      */
     private fun decodeV2(bytes: ByteArray, sessionKey: ByteArray?): TextPacket? {
         return try {
