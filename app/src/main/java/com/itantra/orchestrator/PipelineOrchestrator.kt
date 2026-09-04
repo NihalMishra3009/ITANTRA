@@ -11,6 +11,7 @@ import com.itantra.benchmark.LatencyRecord
 import com.itantra.protocol.PacketType
 import com.itantra.protocol.TextPacket
 import com.itantra.security.MessageSecurityManager
+import com.itantra.security.PeerSessionManager
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
 import com.itantra.transport.CompositeTransport
@@ -82,6 +83,14 @@ class PipelineOrchestrator(
     private val _lastLatencyMetrics = MutableStateFlow<LatencyRecord?>(null)
     val lastLatencyMetrics: StateFlow<LatencyRecord?> = _lastLatencyMetrics.asStateFlow()
 
+    /** Emits on any delivery-status change for live UI updates. */
+    private val _deliveryStatus = MutableStateFlow<List<com.itantra.transport.MessageStatus>>(emptyList())
+    val deliveryStatus: StateFlow<List<com.itantra.transport.MessageStatus>> = _deliveryStatus.asStateFlow()
+
+    /** Emits on topology change (neighbor/route/peer) for live UI updates. */
+    private val _topologyTick = MutableStateFlow(0L)
+    val topologyTick: StateFlow<Long> = _topologyTick.asStateFlow()
+
     var targetRecipientId: String = "*" // Broadcast by default, or specific node ID
 
     var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
@@ -106,8 +115,31 @@ class PipelineOrchestrator(
         myNodeIdValue = nodeProfile.nodeId
         deviceSenderId = nodeProfile.nodeId
         establishSessionKey()
+        // Surface delivery-status changes to live UI (real backend state).
+        deliveryTracker.onStatusChange = {
+            _deliveryStatus.value = deliveryTracker.getAll().takeLast(20)
+        }
         setupTransportListener()
         startDiscoveryAdvertising()
+        startTopologyPoller()
+    }
+
+    /** Poll lightweight topology data (neighbor/route/peer counts) for live UI. */
+    private fun startTopologyPoller() {
+        coroutineScope.launch {
+            var lastSignature = ""
+            while (isActive) {
+                val discovery = meshRoutingManager?.discovery
+                val neighborSig = discovery?.neighbors?.keys?.sorted()?.joinToString(",") ?: ""
+                val routeSig = discovery?.getAllRoutes()?.size ?: 0
+                val sig = "$neighborSig|$routeSig"
+                if (sig != lastSignature) {
+                    lastSignature = sig
+                    _topologyTick.value = System.currentTimeMillis()
+                }
+                delay(2000)
+            }
+        }
     }
 
     /**
@@ -197,52 +229,55 @@ class PipelineOrchestrator(
      * Kick off the ECDH handshake to a newly-connected peer: send it our
      * ephemeral public key inside a SESSION_START packet.
      */
-    fun initiateSessionHandshake() {
+    fun initiateSessionHandshake(peerNodeId: String = "*") {
         val t = transport ?: return
         if (!t.isConnected()) return
-        val (pubB64, priv) = MessageSecurityManager.createEphemeralKeyPairBase64()
-        ephemeralPrivateKey = priv
+        val pubB64 = PeerSessionManager.initiateHandshake(peerNodeId)
         val packet = TextPacket(
             senderId = deviceSenderId,
-            recipientId = "*",
+            recipientId = peerNodeId,
             type = PacketType.SESSION_START,
             language = currentLanguage.code,
-            text = pubB64 // our ephemeral public key
+            text = pubB64
         )
         t.sendPacket(packet)
-        Log.i(TAG, "Sent SESSION_START (ephemeral public key) to peer")
+        Log.i(TAG, "Sent SESSION_START to peer $peerNodeId")
     }
 
     /**
-     * Handles a SESSION_START packet. Returns true if consumed (not a data packet).
-     * Initiator logic: the peer replies with ITS public key; we derive the shared key.
+     * Handles a SESSION_START packet. Returns true if consumed.
+     * Per-peer key derivation: each peer gets its own session key.
      */
     private fun handleSessionPacket(packet: TextPacket): Boolean {
         if (packet.type == PacketType.SESSION_START) {
             coroutineScope.launch {
                 try {
+                    val peerId = packet.senderId
                     val peerPubB64 = packet.text
-                    val peerPub = android.util.Base64.decode(peerPubB64, android.util.Base64.NO_WRAP)
-                    if (ephemeralPrivateKey != null) {
-                        // We are the initiator: derive the shared key now.
-                        val shared = MessageSecurityManager.deriveSharedSessionKey(ephemeralPrivateKey!!, peerPub)
+
+                    if (PeerSessionManager.hasSessionKey(peerId)) {
+                        // Already have a session key for this peer — skip handshake
+                        Log.d(TAG, "Session already established with $peerId")
+                        return@launch
+                    }
+
+                    val shared = PeerSessionManager.handleHandshake(peerId, peerPubB64)
+                    if (shared != null) {
+                        // Also set the global session key for backward compatibility
                         MessageSecurityManager.setSessionKey(shared)
-                        ephemeralPrivateKey = null
-                        _lastReceivedText.value = "Connected to peer ${packet.senderId} (session secured)"
-                        Log.i(TAG, "Session established with ${packet.senderId} (secure channel up)")
-                    } else {
-                        // We are the responder: derive shared key, then reply with our public key.
-                        val (ourPubB64, ourPriv) = MessageSecurityManager.createEphemeralKeyPairBase64()
-                        val shared = MessageSecurityManager.deriveSharedSessionKey(ourPriv, peerPub)
-                        MessageSecurityManager.setSessionKey(shared)
-                        _lastReceivedText.value = "Connected to peer ${packet.senderId} (session secured)"
-                        Log.i(TAG, "Session established with ${packet.senderId}; replying")
+                        _lastReceivedText.value = "Connected to peer $peerId (session secured)"
+                        Log.i(TAG, "Per-peer session established with $peerId")
+                    }
+
+                    // If we're the responder, reply with our public key
+                    if (ephemeralPrivateKey == null) {
+                        val replyPubB64 = PeerSessionManager.initiateHandshake(peerId)
                         val reply = TextPacket(
                             senderId = deviceSenderId,
-                            recipientId = packet.senderId,
+                            recipientId = peerId,
                             type = PacketType.SESSION_START,
                             language = currentLanguage.code,
-                            text = ourPubB64
+                            text = replyPubB64
                         )
                         transport?.sendPacket(reply)
                     }

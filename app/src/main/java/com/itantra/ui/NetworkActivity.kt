@@ -2,26 +2,24 @@ package com.itantra.ui
 
 import android.os.Bundle
 import androidx.appcompat.app.AppCompatActivity
-import com.itantra.R
+import androidx.lifecycle.lifecycleScope
 import com.itantra.ai4bharat.ModelCapabilityRegistry
 import com.itantra.benchmark.BenchmarkLogger
 import com.itantra.databinding.ActivityNetworkBinding
 import com.itantra.identity.NodeIdentity
 import com.itantra.transport.DeliveryStatus
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 /**
  * Network Map + Diagnostics screen. Reads LIVE state from the shared
- * orchestrator — never fabricates nodes or numbers. Shows:
- *  - this node identity (ITN-XXXXXX)
- *  - discovered neighbors
- *  - routing table
- *  - verified model capability (real asset presence)
- *  - delivery status
- *  - latency/RTF samples
+ * orchestrator — never fabricates nodes or numbers. Auto-refreshes as network
+ * state changes (node discovered, route changed, packet forwarded, etc.).
  */
 class NetworkActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityNetworkBinding
+    private var autoRefreshJob: kotlinx.coroutines.Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -30,6 +28,29 @@ class NetworkActivity : AppCompatActivity() {
 
         render()
         binding.btnRefresh.setOnClickListener { render() }
+
+        // Live auto-refresh driven by real backend StateFlows:
+        // delivery status, latency, and topology changes.
+        val orch = (application as com.itantra.iTantraApp).orchestrator
+        lifecycleScope.launch {
+            if (orch != null) {
+                orch.deliveryStatus.collect { render() }
+                orch.topologyTick.collect { render() }
+                orch.lastLatencyMetrics.collect { render() }
+            }
+        }
+        // Fallback poller for transports/peers not surfaced via StateFlow.
+        autoRefreshJob = lifecycleScope.launch {
+            while (true) {
+                delay(2000)
+                render()
+            }
+        }
+    }
+
+    override fun onDestroy() {
+        autoRefreshJob?.cancel()
+        super.onDestroy()
     }
 
     private fun render() {
@@ -51,7 +72,7 @@ class NetworkActivity : AppCompatActivity() {
             "No neighbors discovered yet\n\nDiscovery packets (NODE_HELLO) are exchanged automatically once a peer connects."
         } else {
             neighbors.sortedByDescending { it.lastSeenMs }.joinToString("\n") { n ->
-                "${n.nodeId}  ${n.displayName}\n   role=${n.role}  quality=${"%.0f".format(n.linkQuality * 100)}%  seen=${rel(n.lastSeenMs)}"
+                "${n.nodeId}  ${n.displayName}\n   role=${n.role}  quality=${"%.0f".format(n.linkQuality * 100)}%  seen=${rel(n.lastSeenMs)}\n   transport=${n.transportType}"
             }
         }
 

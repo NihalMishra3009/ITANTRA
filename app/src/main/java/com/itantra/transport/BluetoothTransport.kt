@@ -113,6 +113,7 @@ class BluetoothTransport(
 
         val found = linkedMapOf<String, DeviceInfo>()
 
+        // Include paired/bonded devices — these are most likely iTantra peers
         bluetoothAdapter.bondedDevices?.forEach { dev ->
             found[dev.address] = DeviceInfo(
                 id = dev.address,
@@ -130,12 +131,17 @@ class BluetoothTransport(
                     val device: BluetoothDevice? =
                         intent.getParcelableExtra(BluetoothDevice.EXTRA_DEVICE)
                     if (device != null) {
-                        found[device.address] = DeviceInfo(
-                            id = device.address,
-                            name = device.name ?: "Unknown Device",
-                            address = device.address,
-                            transportType = TransportType.BLUETOOTH
-                        )
+                        // Fetch UUIDs to check for iTantra service
+                        val uuids = device.uuids
+                        val isITantra = uuids?.any { it.uuid == APP_UUID } == true
+                        if (isITantra || device.bondState == BluetoothDevice.BOND_BONDED) {
+                            found[device.address] = DeviceInfo(
+                                id = device.address,
+                                name = device.name ?: "Unknown Device",
+                                address = device.address,
+                                transportType = TransportType.BLUETOOTH
+                            )
+                        }
                     }
                 }
             }
@@ -143,7 +149,7 @@ class BluetoothTransport(
         context.registerReceiver(receiver, IntentFilter(BluetoothDevice.ACTION_FOUND))
 
         val discoveryOk = bluetoothAdapter.startDiscovery()
-        Log.i(TAG, "Bluetooth discovery started: $discoveryOk")
+        Log.i(TAG, "Bluetooth discovery started: $discoveryOk (filtering for iTantra UUID)")
 
         coroutineScope.launch {
             delay(8000)
@@ -266,7 +272,7 @@ class BluetoothTransport(
             if (peer.socket.isConnected) {
                 try {
                     val dos = peer.dataOut
-                    val bytes = codec.encode(packet)
+            val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
                     dos.writeInt(bytes.size)
                     dos.write(bytes)
                     dos.flush()
@@ -291,7 +297,7 @@ class BluetoothTransport(
         }
         return try {
             val dos = peer.dataOut
-            val bytes = codec.encode(packet)
+            val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()

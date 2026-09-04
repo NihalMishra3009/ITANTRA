@@ -2,6 +2,7 @@ package com.itantra.identity
 
 import android.content.Context
 import android.util.Log
+import com.itantra.security.AndroidKeyStore
 import com.itantra.security.Base64Codec
 import com.itantra.security.MessageSecurityManager
 import java.security.PrivateKey
@@ -110,6 +111,9 @@ object NodeIdentity {
 
     /** Return the persistent private key (used only for local signing — never sent). */
     fun privateKey(context: Context): PrivateKey? {
+        // Prefer the Android Keystore-backed key (non-exportable, not plaintext).
+        AndroidKeyStore.getPrivateKey()?.let { return it }
+        // Fall back to the legacy SharedPreferences key for older/migrated devices.
         val b64 = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getString(KEY_PRIV, null) ?: return null
         return try {
@@ -135,12 +139,26 @@ object NodeIdentity {
     private fun ensureKeyPair(context: Context, nodeId: String) {
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getString(KEY_PUB, null) != null) return
+
+        // Try to provision a Keystore-backed identity keypair (non-exportable).
+        val keystorePub = AndroidKeyStore.provisionOrLoadPublicKey(context)
+        if (keystorePub != null) {
+            prefs.edit()
+                .putString(KEY_PUB, keystorePub)
+                .putLong(KEY_CREATED, System.currentTimeMillis())
+                .putString(KEY_NODE_ID, nodeId)
+                .apply()
+            Log.i(TAG, "Identity keypair provisioned in Android Keystore (public key stored)")
+            return
+        }
+
+        // Fall back to legacy SharedPreferences keypair (migration path).
         val (pubB64, privB64) = MessageSecurityManager.generatePersistentKeyPairBase64()
         prefs.edit()
             .putString(KEY_PUB, pubB64)
             .putString(KEY_PRIV, privB64)
             .putLong(KEY_CREATED, System.currentTimeMillis())
-            .putString(KEY_NODE_ID, nodeId) // durable node id
+            .putString(KEY_NODE_ID, nodeId)
             .apply()
     }
 }

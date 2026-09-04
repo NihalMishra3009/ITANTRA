@@ -244,7 +244,7 @@ class WifiDirectTransport(
             if (peer.socket.isConnected) {
                 try {
                     val dos = peer.dataOut
-                    val bytes = codec.encode(packet)
+                    val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
                     dos.writeInt(bytes.size)
                     dos.write(bytes)
                     dos.flush()
@@ -265,7 +265,7 @@ class WifiDirectTransport(
         }
         return try {
             val dos = peer.dataOut
-            val bytes = codec.encode(packet)
+            val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
             dos.writeInt(bytes.size)
             dos.write(bytes)
             dos.flush()
