@@ -117,16 +117,22 @@ iTantra/
 │
 ├── docs/                         # Technical Architecture & Verification Documentation
 │   ├── ARCHITECTURE.md                # system design & module breakdown
+│   ├── SIH_COMPLIANCE.md              # SIH 26173 requirement -> status matrix
 │   ├── MODEL_LICENSES.md              # open-source licenses (MIT / Apache 2.0)
 │   ├── OFFLINE_VERIFICATION.md        # airplane-mode & zero-network proof
+│   ├── COMMUNICATION_VERIFICATION.md  # mesh / DTN / security verification
 │   ├── ACCURACY_RESULTS.md            # WER / CER accuracy metrics
 │   ├── EFFICIENCY_RESULTS.md          # RAM, CPU, battery benchmarks
 │   ├── LATENCY_RESULTS.md             # end-to-end latency breakdown
 │   ├── DEMO_GUIDE.md                  # step-by-step demo walkthrough
-│   └── LIMITATIONS.md                 # physical boundaries & model-availability constraints
+│   ├── LIMITATIONS.md                 # physical boundaries & model-availability constraints
+│   ├── AI4BHARAT_INTEGRATION.md       # Indic integration & architecture
+│   └── MODEL_TUNING_REPORT.md         # quantization / tuning results
 │
 └── README.md
 ```
+
+> **Multi-peer mesh + per-peer security + live network UI + Android Keystore** are implemented (see `CompositeTransport`, `PeerSessionManager`, `AndroidKeyStore`, live `NetworkActivity`). Model assets (Whisper/VITS/Silero) are stored via Git LFS — run `git lfs pull` after clone.
 
 > **Model assets** (Whisper base `.onnx`, Silero `.onnx`, VITS `.onnx`, `sherpa-onnx .aar`) are stored via **Git LFS**. After cloning run `git lfs pull` to fetch the real binaries.
 

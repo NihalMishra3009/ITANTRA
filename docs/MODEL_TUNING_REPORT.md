@@ -1,11 +1,13 @@
-# AI4Bharat & On-Device Model Tuning and Optimization Report
+# On-Device Model Tuning and Optimization Report
 **iTantra — ISRO Problem Statement 26173 | Smart India Hackathon**
+
+> **CORRECTION NOTICE (Phase 29 hardening audit):** The optimization values below were derived in the development validation phase. The **final production stack** is OpenAI **Whisper base int8** (STT, multilingual) + **VITS** (TTS, per-language) + **Silero VAD** (energy fallback active), all via sherpa-onnx/ONNX Runtime. Where the body text references AI4Bharat IndicConformer / Indic-TTS, that reflects the earlier design; the live engine is Whisper + VITS.
 
 ---
 
 ## 1. Executive Summary
 
-This report documents the quantitative optimizations, hyperparameter tuning, and quantization methods applied to the **AI4Bharat IndicConformer (STT)**, **Silero VAD v5**, and **Indic-TTS** engines to achieve real-time, low-latency performance on resource-constrained Android mobile devices.
+This report documents the quantitative optimizations, hyperparameter tuning, and quantization methods applied to the **Whisper base int8 (STT)**, **Silero VAD**, and **VITS (TTS)** engines to achieve real-time, low-latency performance on resource-constrained Android mobile devices.
 
 ```
 +───────────────────────────────────────────────────────────────────────────────────────────+

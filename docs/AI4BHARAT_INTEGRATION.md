@@ -1,7 +1,15 @@
-# AI4Bharat Model Integration & Offline Transceiver Architecture
+# AI4Bharat / Indic Integration & Offline Transceiver Architecture
 **iTantra — ISRO Problem Statement 26173 | Smart India Hackathon**
 
-This document specifies the integration of official **AI4Bharat Indic language, Speech-to-Text (STT), Text-to-Speech (TTS), and Unicode text normalization models** into the offline-first iTantra transceiver.
+> **CORRECTION NOTICE (Phase 29 hardening audit):**
+> This document previously described an AI4Bharat IndicConformer (STT) + Indic-TTS stack with AES-128/256-CBC. The **actual production implementation** uses:
+> - **STT**: OpenAI **Whisper base int8** (multilingual, all 10 languages) via sherpa-onnx / ONNX Runtime — `SttEngine.kt`
+> - **TTS**: per-language **VITS** models via sherpa-onnx — `TtsEngine.kt` (only Bengali currently bundled)
+> - **Text normalization**: local `IndicTextNormalizer` (Unicode NFC)
+> - **Encryption**: **AEAD AES-256-GCM** + ECDH P-256 + HKDF-SHA256 — `MessageSecurityManager.kt`
+> The adapter interfaces (`Ai4BharatSttAdapter` / `Ai4BharatTtsAdapter`) are preserved and implemented by `SttEngine` / `TtsEngine`.
+
+This document specifies the integration of Indic language Speech-to-Text (STT), Text-to-Speech (TTS), and Unicode text normalization into the offline-first iTantra transceiver.
 
 ---
 
@@ -19,13 +27,13 @@ The AI model inference layer is strictly decoupled from the radio and mesh routi
 |  [Audio Capture (16kHz PCM)]                                                            |
 |       │                                                                                 |
 |       ▼                                                                                 |
-|  [AI4Bharat IndicConformer STT Engine] (Acoustic CTC Feature Extractor)                 |
+|  [Whisper base int8 STT Engine] (multilingual, all 10 languages, ONNX)                    |
 |       │                                                                                 |
 |       ▼                                                                                 |
-|  [AI4Bharat IndicTextNormalizer] (Unicode NFC, Danda, Nukta, Whitespace Cleanup)        |
+|  [IndicTextNormalizer] (Unicode NFC, Danda, Nukta, Whitespace Cleanup)        |
 |       │                                                                                 |
 |       ▼                                                                                 |
-|  [MessageSecurityManager] (AES-128/256-CBC Payload Encryption)                          |
+|  [MessageSecurityManager] (AEAD AES-256-GCM + ECDH P-256 Encryption)                   |
 |       │                                                                                 |
 |       ▼ (Encrypted Ciphertext TextPacket)                                               |
 |  [Offline Mesh & Radio Layer] (Bluetooth RFCOMM / Wi-Fi Direct TCP Sockets)             |
@@ -47,13 +55,13 @@ The AI model inference layer is strictly decoupled from the radio and mesh routi
 |  [Offline Mesh & Radio Layer]                                                           |
 |       │                                                                                 |
 |       ▼ (Ciphertext Ingestion)                                                          |
-|  [MessageSecurityManager] (AES Payload Decryption at Destination)                       |
+|  [MessageSecurityManager] (AES-256-GCM Payload Decryption at Destination)               |
 |       │                                                                                 |
 |       ▼ (Original Indic Plaintext)                                                      |
 |  [Language Identification & Dispatcher]                                                 |
 |       │                                                                                 |
 |       ▼                                                                                 |
-|  [AI4Bharat Indic-TTS Engine] (22.05kHz Acoustic PCM Synthesis)                         |
+|  [VITS Neural TTS Engine] (24kHz Acoustic PCM Synthesis, per-language ONNX)             |
 |       │                                                                                 |
 |       ▼                                                                                 |
 |  [Speaker Playback] (STREAM_MUSIC / High-Priority STREAM_ALARM SOS Siren)               |
@@ -62,14 +70,15 @@ The AI model inference layer is strictly decoupled from the radio and mesh routi
 
 ---
 
-## 2. Pretrained AI4Bharat Model Inventory & Licensing
+## 2. Model Inventory & Licensing (actual production stack)
 
-| Model Function | Model Name / Checkpoint | Upstream Repository | License | On-Device Mobile Optimization |
+| Model Function | Model Name | Upstream Repository | License | On-Device Optimization |
 |---|---|---|---|---|
-| **STT (Speech-to-Text)** | AI4Bharat IndicConformer Hybrid CTC | [AI4Bharat/IndicConformerASR](https://github.com/AI4Bharat/IndicConformerASR) | **MIT / CC-BY 4.0** | Int8 Quantized TFLite / ONNX Mobile (142MB peak RAM) |
-| **TTS (Text-to-Speech)** | AI4Bharat Indic-TTS VITS / FastPitch | [AI4Bharat/Indic-TTS](https://github.com/AI4Bharat/Indic-TTS) | **MIT / CC-BY 4.0** | Acoustic Vocoder synthesis (22.05kHz PCM) |
-| **Text Normalizer** | AI4Bharat IndicNormalizer | [AI4Bharat/IndicNLP](https://github.com/AI4Bharat/indic_nlp_library) | **MIT License** | Pure Kotlin on-device zero-latency normalizer |
-| **Voice Activity Detector**| Silero VAD v5 ONNX | [snakers4/silero-vad](https://github.com/snakers4/silero-vad) | **MIT License** | ONNX Runtime Mobile (2.3MB footprint) |
+| **STT (Speech-to-Text)** | OpenAI Whisper **base int8** (multilingual, 10 langs) | [openai/whisper](https://github.com/openai/whisper) | **MIT** | Int8 quantized ONNX via sherpa-onnx (encoder 29MB + decoder 130MB) |
+| **TTS (Text-to-Speech)** | VITS per-language ONNX | [jaywalnut310/vits](https://github.com/jaywalnut310/vits) | **MIT** | Neural vocoder synthesis (24kHz PCM); only Bengali bundled |
+| **Text Normalizer** | `IndicTextNormalizer` | in-repo | MIT License | Pure Kotlin on-device zero-latency normalizer |
+| **Voice Activity Detector** | Silero VAD ONNX (energy fallback active) | [snakers4/silero-vad](https://github.com/snakers4/silero-vad) | **MIT License** | ONNX Runtime (2.3MB); v4 asset incompatible → energy fallback |
+| **Runtime** | sherpa-onnx 1.13.7 | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | **Apache 2.0** | ONNX Runtime bundled in AAR |
 
 ---
 
@@ -111,10 +120,11 @@ interface Ai4BharatTtsAdapter {
 ## 5. Security & Privacy Guarantees
 
 - **Zero Cloud Leakage**: Microphones and audio data are never streamed over external network sockets.
-- **Payload Ciphertext**: Plain text is encrypted using AES-128/256-CBC with per-message secure IVs before transmission.
+- **Payload Ciphertext**: Plain text is encrypted using **AEAD AES-256-GCM** (session keys derived via ECDH P-256 + HKDF-SHA256) with unique per-message nonce + associated data (replay protection).
+- **Per-peer sessions**: Each link has an independent session key (`PeerSessionManager`); relays forward encrypted payloads without decrypting user content.
 - **Relay Privacy**: Multi-hop relay nodes forward packets blindly without decrypting voice text.
-- **Ephemeral Audio Buffers**: Audio recording memory buffers are cleared immediately after CTC transcription.
-- **Integrity**: HMAC-SHA256 signatures detect and reject any tampered packets.
+- **Ephemeral Audio Buffers**: Audio recording memory buffers are cleared immediately after transcription.
+- **Integrity**: HMAC-SHA256 auth tag in the binary codec detects and rejects any tampered packets.
 
 ---
 

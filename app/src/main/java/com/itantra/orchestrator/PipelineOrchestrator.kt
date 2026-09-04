@@ -223,8 +223,6 @@ class PipelineOrchestrator(
 
     // --- Session handshake (ECDH) -------------------------------------------
 
-    private var ephemeralPrivateKey: java.security.PrivateKey? = null
-
     /**
      * Kick off the ECDH handshake to a newly-connected peer: send it our
      * ephemeral public key inside a SESSION_START packet.
@@ -264,22 +262,21 @@ class PipelineOrchestrator(
                     val shared = PeerSessionManager.handleHandshake(peerId, peerPubB64)
                     if (shared != null) {
                         // Also set the global session key for backward compatibility
-                        MessageSecurityManager.setSessionKey(shared)
+                        MessageSecurityManager.setSessionKey(shared.sessionKey)
                         _lastReceivedText.value = "Connected to peer $peerId (session secured)"
                         Log.i(TAG, "Per-peer session established with $peerId")
-                    }
 
-                    // If we're the responder, reply with our public key
-                    if (ephemeralPrivateKey == null) {
-                        val replyPubB64 = PeerSessionManager.initiateHandshake(peerId)
-                        val reply = TextPacket(
-                            senderId = deviceSenderId,
-                            recipientId = peerId,
-                            type = PacketType.SESSION_START,
-                            language = currentLanguage.code,
-                            text = replyPubB64
-                        )
-                        transport?.sendPacket(reply)
+                        // If we're the responder, reply with our public key.
+                        shared.replyPublicKeyB64?.let { ourPubB64 ->
+                            val reply = TextPacket(
+                                senderId = deviceSenderId,
+                                recipientId = peerId,
+                                type = PacketType.SESSION_START,
+                                language = currentLanguage.code,
+                                text = ourPubB64
+                            )
+                            transport?.sendPacket(reply)
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Session handshake failed", e)

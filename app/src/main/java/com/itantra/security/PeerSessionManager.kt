@@ -82,26 +82,34 @@ object PeerSessionManager {
     }
 
     /**
-     * Handle a SESSION_START from a peer. Returns the derived session key.
-     * If we initiated the handshake, completes it. If we're the responder,
-     * generates our own key pair and derives the shared key.
+     * Handle a SESSION_START from a peer.
+     *
+     * @return a [HandshakeResult]: the derived session key (already stored for
+     *         this peer) plus, if this node is the responder, the public key it
+     *         must send back to complete the handshake (replyPublicKeyB64).
+     *         Returns null on failure.
      */
-    fun handleHandshake(peerNodeId: String, peerPubKeyB64: String): ByteArray? {
-        val pendingPriv = pendingHandshakes.remove(peerNodeId)
+    data class HandshakeResult(
+        val sessionKey: ByteArray,
+        val replyPublicKeyB64: String? // non-null only when we are the responder
+    )
+
+    fun handleHandshake(peerNodeId: String, peerPubKeyB64: String): HandshakeResult? {
         return try {
             val peerPub = android.util.Base64.decode(peerPubKeyB64, android.util.Base64.NO_WRAP)
+            val pendingPriv = pendingHandshakes.remove(peerNodeId)
             if (pendingPriv != null) {
-                // We initiated: derive shared key
+                // We initiated this handshake: derive the shared key, no reply needed.
                 val shared = MessageSecurityManager.deriveSharedSessionKey(pendingPriv, peerPub)
                 setSessionKey(peerNodeId, shared)
-                shared
+                HandshakeResult(shared, replyPublicKeyB64 = null)
             } else {
-                // We're the responder: generate our key pair and derive
+                // We are the responder: generate our own ephemeral key, derive the
+                // shared key, and return our public key for the reply.
                 val (ourPubB64, ourPriv) = MessageSecurityManager.createEphemeralKeyPairBase64()
                 val shared = MessageSecurityManager.deriveSharedSessionKey(ourPriv, peerPub)
                 setSessionKey(peerNodeId, shared)
-                // Return both the key and our public key (caller sends reply)
-                shared
+                HandshakeResult(shared, replyPublicKeyB64 = ourPubB64)
             }
         } catch (e: Exception) {
             Log.e(TAG, "Handshake failed with peer $peerNodeId", e)

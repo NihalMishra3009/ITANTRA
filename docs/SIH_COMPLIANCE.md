@@ -30,17 +30,21 @@ All statuses reflect actual implementation verified against unit tests and real 
 | 24 | Expired packet rejection | TTL-based `isExpired()` check at transport boundary. | `TextPacket.isExpired()`; `DtnChainTest.testExpiredPacketDropped` | PASS |
 | 25 | Corrupted packet rejection | HMAC-SHA256 auth tag in binary codec. Tampered packets rejected. | `BinaryPacketCodec`; `TextPacketTest.testBinaryCorruptionRejectedWithSessionKey` | PASS |
 | 26 | Premium emergency UI | Dark near-black, green/amber/red accents, large PTT radar, SOS button. | `colors.xml`, `themes.xml`, `activity_main.xml` | PASS |
-| 27 | Network diagnostics | `NetworkActivity`: live node ID, neighbors, routes, models, delivery status, latency. | `NetworkActivity.kt` | PASS (button-refresh, not live-updating) |
+| 27 | Network diagnostics | `NetworkActivity`: live node ID, neighbors, routes, models, delivery status, latency. Auto-refreshes via StateFlow (deliveryStatus, topologyTick, lastLatencyMetrics) + 2s poller. | `NetworkActivity.kt`; `PipelineOrchestrator.deliveryStatus` | PASS (live-updating) |
 | 28 | Release build | `assembleRelease` green. `isMinifyEnabled=false`. | `app-release-unsigned.apk` (320MB) | PASS |
-| 29 | Unit tests | 51 tests across 8 test files. All pass. | `gradlew testDebugUnitTest` | PASS |
+| 29 | Unit tests | 55 tests across 10 test files (incl. `MeshDtnIntegrationTest` 4-node/DTN/failure). All pass. | `gradlew testDebugUnitTest` | PASS |
 | 30 | Documentation | `ARCHITECTURE.md` rewritten to match actual code. `SIH_COMPLIANCE.md`. README updated. | `docs/` | PASS |
+| 31 | Multi-peer transport | `CompositeTransport` wraps BT + Wi-Fi Direct. Each of `BluetoothTransport`/`WifiDirectTransport` now accepts MULTIPLE simultaneous peer connections (server socket stays open). Relay can hold A↔R1 and R1↔R2 at once. | `CompositeTransport.kt`, `BluetoothTransport.kt`, `WifiDirectTransport.kt` | PASS (code) — physical multi-phone not tested |
+| 32 | Per-peer security | `PeerSessionManager` maintains per-peer ECDH session keys. Relays forward encrypted payloads without decrypting user content. | `PeerSessionManager.kt` | PASS (code) |
+| 33 | Android Keystore | Identity private key provisioned as non-exportable EC key in Android Keystore (API 23+); shared-preferences fallback for legacy/migration. | `AndroidKeyStore.kt`; `NodeIdentity.ensureKeyPair` | PASS (code) — not hardware-tested |
+| 34 | BT iTantra discovery | Bluetooth discovery filters to devices exposing iTantra APP_UUID (bonded always shown). | `BluetoothTransport.discoverDevices` | PASS (code) |
 
 ## Honest Limitations
 
-1. **TTS models for 9 languages not bundled.** Only Bengali VITS is present. STT works for all 10. The 9 missing models must be placed under `assets/models/tts/vits_<lang>/`.
-2. **Silero VAD v4 asset incompatible** with sherpa-onnx 1.13.7. Energy VAD fallback active.
-3. **Multi-peer transport is interface-level only** (`TransportLayer.sendToPeer`). The actual BT/WiFi-Direct transports still hold one socket. True simultaneous multi-peer requires rewrite of `BluetoothTransport`/`WifiDirectTransport` socket management — untestable without physical multi-phone hardware.
-4. **Physical 4-phone A→R1→R2→B test not performed.** The DTN chain is proven by unit tests with `SimNode` topology, but physical validation requires 4 Android devices.
-5. **NetworkActivity updates on button press** (not live). Live StateFlow updates need wiring to orchestrator flows.
-6. **Android Keystore migration not implemented.** Private keys remain in SharedPreferences.
-7. **BT iTantra-specific service discovery** uses generic `APP_UUID` — non-iTantra devices show in scan results.
+1. **TTS models for 9 languages not bundled.** Only Bengali VITS is present. STT works for all 10. The 9 missing models must be placed under `assets/models/tts/vits_<lang>/`. The `TtsEngine` returns empty audio (never fake speech) when a model is absent, and `ModelCapabilityRegistry` reports honestly.
+2. **Silero VAD v4 asset incompatible** with sherpa-onnx 1.13.7. Energy VAD fallback active; `isUsingNeuralVad()` reports false and diagnostics report accurately.
+3. **Multi-peer transport is code-complete but not physically validated.** The `CompositeTransport` + multi-accept sockets are implemented and unit-tested at the routing layer, but a real 4-phone relay test requires 4 Android devices and was NOT performed in this environment.
+4. **Physical 4-phone A→R1→R2→B test not performed.** The DTN chain is proven by unit tests (`DtnChainTest`, `MeshDtnIntegrationTest`), but physical validation requires 4 Android devices.
+5. **Android Keystore** is implemented but not hardware-verified; falls back to SharedPreferences on unsupported devices.
+6. **BT iTantra discovery** filters by APP_UUID, but UUID fetch from unpaired in-range devices is best-effort (bonded devices always shown).
+7. **Wi-Fi Direct** group-owner IP resolution uses `WifiP2pInfo` (no hardcoded fallback), but multi-peer Wi-Fi Direct group formation is limited by Android P2P constraints and not physically validated.
