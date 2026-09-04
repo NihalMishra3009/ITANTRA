@@ -100,6 +100,9 @@ class MainActivity : AppCompatActivity() {
         binding.btnOpenNetwork.setOnClickListener {
             startActivity(android.content.Intent(this, NetworkActivity::class.java))
         }
+        binding.btnOpenModels.setOnClickListener {
+            startActivity(android.content.Intent(this, LanguageModelsActivity::class.java))
+        }
 
         renderStatus(TransceiverState.IDLE)
 
@@ -130,6 +133,7 @@ class MainActivity : AppCompatActivity() {
             transport = currentTransport
         )
         (application as com.itantra.iTantraApp).orchestrator = orchestrator
+        orchestrator.speechModelManager.selectLanguage(orchestrator.currentLanguage)
     }
 
     private fun setupLanguageSpinner() {

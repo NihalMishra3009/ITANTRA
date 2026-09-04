@@ -75,6 +75,25 @@
                 app:layout_constraintEnd_toEndOf="@id/viewStatusDot"
                 app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
 
+            <!-- Language Models launcher -->
+            <TextView
+                android:id="@+id/btnOpenModels"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_surface_chip"
+                android:paddingHorizontal="14dp"
+                android:paddingVertical="8dp"
+                android:clickable="true"
+                android:focusable="true"
+                android:text="MODELS"
+                android:textAllCaps="true"
+                android:textColor="@color/comm_green"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                app:layout_constraintBottom_toBottomOf="@id/btnOpenNetwork"
+                app:layout_constraintEnd_toStartOf="@id/btnOpenNetwork"
+                app:layout_constraintTop_toTopOf="@id/btnOpenNetwork" />
+
             <TextView
                 android:id="@+id/tvHeaderConn"
                 android:layout_width="wrap_content"

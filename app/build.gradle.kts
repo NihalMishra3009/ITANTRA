@@ -66,6 +66,7 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.gson)
+    implementation(libs.commons.compress)
 
     // sherpa-onnx: Whisper multilingual ASR + VITS/MMS TTS + ONNX Runtime (bundled) (Apache 2.0)
     implementation(files("libs/sherpa-onnx-1.13.7.aar"))

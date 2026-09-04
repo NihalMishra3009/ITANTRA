@@ -93,9 +93,18 @@ class PipelineOrchestrator(
 
     var targetRecipientId: String = "*" // Broadcast by default, or specific node ID
 
+    /** Speech ML facade — routes STT/TTS through managers for lazy loading + fallback. */
+    val speechModelManager = com.itantra.speech.SpeechModelManager(
+        context = context,
+        sttEngine = sttEngine,
+        ttsEngine = ttsEngine,
+        vadEngine = vadEngine
+    )
+
     var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
         set(value) {
             field = value
+            speechModelManager.selectLanguage(value)
             sttEngine.initialize(value.code)
             ttsEngine.initialize(value.code)
         }
@@ -334,7 +343,7 @@ class PipelineOrchestrator(
                     lastPartialMs = now
                     val partial: FloatArray = synchronized(speechAudioBuffer) { speechAudioBuffer.toFloatArray() }
                     launch {
-                        val res = sttEngine.transcribe(partial)
+                        val res = speechModelManager.transcribe(partial)
                         if (res.text.isNotBlank()) {
                             _lastTranscribedText.value = res.text
                         }
@@ -384,7 +393,7 @@ class PipelineOrchestrator(
         coroutineScope.launch {
             _transceiverState.value = TransceiverState.TRANSCRIBING
             val tSttStart = System.currentTimeMillis()
-            val sttResult = sttEngine.transcribe(audioData)
+            val sttResult = speechModelManager.transcribe(audioData)
             val tSttEnd = System.currentTimeMillis()
 
             val normalizedText = IndicTextNormalizer.normalize(sttResult.text, currentLanguage.code)
@@ -482,7 +491,7 @@ class PipelineOrchestrator(
 
             _transceiverState.value = TransceiverState.SYNTHESIZING
             val tTtsStart = System.currentTimeMillis()
-            val ttsResult = ttsEngine.synthesize(text = packet.text, languageCode = packet.language, isAlert = packet.isAlert)
+            val ttsResult = speechModelManager.synthesize(text = packet.text, langCode = packet.language, isAlert = packet.isAlert)
             val tTtsEnd = System.currentTimeMillis()
 
             _transceiverState.value = TransceiverState.PLAYING

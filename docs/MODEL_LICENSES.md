@@ -1,29 +1,25 @@
-# Model License & Attribution Audit
-**iTantra — ISRO Problem Statement 26173**
+# iTantra Model Licenses
 
-> **CORRECTION NOTICE (Phase 29 hardening audit):** This document previously listed AI4Bharat IndicConformer, Indic-TTS, Vosk, and TensorFlow Lite as the bundled stack. The **actual production stack** is OpenAI Whisper (STT) + VITS (TTS) + Silero VAD, all running on sherpa-onnx / ONNX Runtime. The table below reflects only what is actually bundled and used.
+Licenses for models referenced by the repository. Publicly downloadable does not automatically mean unrestricted redistribution; each entry notes the actual license and any use caveat.
 
-All models, frameworks, and acoustic runtimes used in iTantra are 100% open-source, permissive, and approved for offline on-device deployment.
+## Bundled Assets
 
----
+| Model | Language | License | Notes |
+|-------|----------|---------|-------|
+| Whisper base (encoder/decoder int8 ONNX) | all 10 | MIT | OpenAI Whisper code/weights MIT |
+| VITS `vits_bn` | Bengali | MIT | Bundled `model.onnx` + `tokens.txt` |
+| Silero VAD | — | MIT | Silero model weights MIT |
 
-## 1. Model Inventory & Licenses (actual bundled stack)
+## Candidate Models (declared in registry, NOT yet bundled)
 
-| Component | Model Name / Checkpoint | Primary Upstream Repository | License Type | Commercial & Offline Use | Attribution Required |
-|---|---|---|---|---|---|
-| **STT** | OpenAI Whisper **base int8** (multilingual) | [openai/whisper](https://github.com/openai/whisper) | **MIT License** | Yes | Yes (OpenAI Whisper) |
-| **TTS** | VITS (per-language ONNX; Bengali bundled) | [jaywalnut310/vits](https://github.com/jaywalnut310/vits) | **MIT License** | Yes | Yes (VITS authors) |
-| **VAD** | Silero VAD (ONNX; energy fallback active) | [snakers4/silero-vad](https://github.com/snakers4/silero-vad) | **MIT License** | Yes | Yes (Silero) |
-| **Inference Runtime** | sherpa-onnx 1.13.7 (whisper + VITS + VAD) | [k2-fsa/sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx) | **Apache 2.0** | Yes | Yes (k2-fsa) |
-| **ONNX Runtime** | ONNX Runtime (bundled via sherpa-onnx AAR) | [microsoft/onnxruntime](https://github.com/microsoft/onnxruntime) | **MIT License** | Yes | Yes (Microsoft Corporation) |
+These are declared as candidate packs. Before bundling, their redistribution license MUST be confirmed against the weights' actual license (check the HuggingFace/GitHub model-card each time):
 
-> **Note:** STT uses a single multilingual Whisper base int8 model for all 10 Indian languages. TTS uses per-language VITS models; only `vits_bn` (Bengali) is currently bundled. `ModelCapabilityRegistry` verifies real asset presence and reports honestly which languages have TTS.
+| Model | Family | License status to verify |
+|-------|--------|--------------------------|
+| IndicConformer (AI4Bharat) | Paraformer CTC | Verify per-checkpoint; AI4Bharat models commonly CC-BY-NC / or specific licences — confirm before bundling/redistribution |
+| IndicF5 (AI4Bharat) | Flow-matching TTS | Verify per-checkpoint; confirm weights + vocoder license (often CC-BY-NC) |
+| Lightweight VITS / Piper voices | VITS | piper voices vary (many CC-BY / MIT); verify each voice |
 
----
+## Rule
 
-## 2. Redistribution & Compliance Notes
-
-1. **No Proprietary Commercial Voice SDKs**: iTantra does not bundle proprietary SDKs (e.g. Google Cloud Speech, AWS Transcribe, Azure Cognitive Services, or closed SDKs).
-2. **Local Model Weight Packaging**: Models are stored within the Android assets package (`assets/models/`) and cached directly in application internal storage (`context.filesDir`).
-3. **Attribution Statement**:
-   > *"This software utilizes open-source neural acoustic and voice models including OpenAI Whisper, VITS, and Silero VAD, running on the sherpa-onnx / ONNX Runtime inference engine, under MIT and Apache 2.0 licenses."*
+Do **not** include a model merely because its page is public. Confirm the **weights license**, **tokenizer license**, and **vocoder license** allow redistribution for a hackathon. This file will be updated once candidate weights are actually selected and bundled.

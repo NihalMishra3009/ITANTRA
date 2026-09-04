@@ -96,6 +96,14 @@ class NetworkActivity : AppCompatActivity() {
         }
         sb.appendLine("\nSTT: Whisper base int8 (shared, all 10 languages)")
         sb.appendLine("TTS: per-language VITS — only bundled languages available")
+        // ML device profile + active model
+        orch?.speechModelManager?.let { smm ->
+            sb.appendLine()
+            sb.appendLine("DEVICE: ${smm.describeDevice()}")
+            sb.appendLine("LANG: ${smm.currentLanguage().code}")
+            sb.appendLine("STT: ${smm.registry().bestAvailable(smm.currentLanguage().code, com.itantra.speech.ModelRole.STT, smm.deviceClass)?.modelName ?: "none"}")
+            sb.appendLine("TTS: ${smm.registry().bestAvailable(smm.currentLanguage().code, com.itantra.speech.ModelRole.TTS, smm.deviceClass)?.modelName ?: "none"}")
+        }
         binding.tvModels.text = sb.toString()
 
         // --- Delivery status ---
