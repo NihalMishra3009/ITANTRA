@@ -15,17 +15,17 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:letterSpacing="0.08"
-            android:text="LANGUAGE MODELS"
+            android:text="@string/model_screen_title"
             android:textAllCaps="true"
             android:textColor="@color/text_white"
-            android:textSize="16sp"
+            android:textSize="18sp"
             android:textStyle="bold" />
 
         <TextView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Optional neural language packs. Internet is used ONLY to download/update a pack once; after install, speech runs fully offline."
+            android:text="@string/model_screen_subtitle"
             android:textColor="@color/text_faint"
             android:textSize="12sp" />
 

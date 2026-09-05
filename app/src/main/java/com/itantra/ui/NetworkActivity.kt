@@ -32,12 +32,10 @@ class NetworkActivity : AppCompatActivity() {
         // Live auto-refresh driven by real backend StateFlows:
         // delivery status, latency, and topology changes.
         val orch = (application as com.itantra.iTantraApp).orchestrator
-        lifecycleScope.launch {
-            if (orch != null) {
-                orch.deliveryStatus.collect { render() }
-                orch.topologyTick.collect { render() }
-                orch.lastLatencyMetrics.collect { render() }
-            }
+        if (orch != null) {
+            lifecycleScope.launch { orch.deliveryStatus.collect { render() } }
+            lifecycleScope.launch { orch.topologyTick.collect { render() } }
+            lifecycleScope.launch { orch.lastLatencyMetrics.collect { render() } }
         }
         // Fallback poller for transports/peers not surfaced via StateFlow.
         autoRefreshJob = lifecycleScope.launch {
@@ -63,6 +61,17 @@ class NetworkActivity : AppCompatActivity() {
             "THIS NODE  ${profile.nodeId}\nROLE ${profile.role}   PROTOCOL v${profile.protocolVersion}"
         } else {
             "THIS NODE  (uninitialized)"
+        }
+
+        // --- Connection + security summary (real backend) ---
+        val connected = orch?.transport?.isConnected() == true
+        val transType = orch?.meshRoutingManager?.discovery?.neighbors?.values.orEmpty()
+            .joinToString("/") { it.transportType.name }
+        binding.tvSecurity.text = buildString {
+            appendLine(if (connected) "STATUS   ● Connected" else "STATUS   ● Offline")
+            appendLine("TRANSPORT   ${transType.ifEmpty { "Bluetooth / Wi-Fi Direct" }}")
+            appendLine("SECURITY   ECDH P-256  ·  AES-256-GCM")
+            append("OFFLINE   No internet required — proximity radio links only")
         }
 
         // --- Neighbors ---
@@ -94,8 +103,8 @@ class NetworkActivity : AppCompatActivity() {
             val tts = if (cap.ttsAvailable) "TTS ✓" else "TTS ✗"
             sb.appendLine("${cap.language.displayName.padEnd(10)} $stt  $tts")
         }
-        sb.appendLine("\nSTT: Whisper base int8 (shared, all 10 languages)")
-        sb.appendLine("TTS: per-language VITS — only bundled languages available")
+        sb.appendLine("\nSTT: Whisper base int8 (shared, all 10 languages) — offline on device")
+        sb.appendLine("TTS: downloadable Piper/VITS voices (hi, en, ml, gu, bn) — offline on device")
         // ML device profile + active model
         orch?.speechModelManager?.let { smm ->
             sb.appendLine()

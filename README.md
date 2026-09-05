@@ -42,7 +42,7 @@ RECEIVER DESTINATION NODE
       ↓
 MESSAGESECURITYMANAGER (AEAD decryption)
       ↓
-VITS NEURAL TTS (ONNX via sherpa-onnx OfflineTts)
+VITS / PIPER NEURAL TTS (ONNX via sherpa-onnx OfflineTts)
       ↓
 SPEAKER AUDIO PLAYBACK (AudioTrack; alert uses alarm stream + audio focus)
 ```
@@ -60,9 +60,13 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
 ## 🚀 Key Features
 
 - **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
-- **10 Indian Languages Supported**: Hindi (`hi`), Marathi (`mr`), Bengali (`bn`, TTS), Gujarati (`gu`), Odia (`or`), Tamil (`ta`), Telugu (`te`), Kannada (`kn`), Malayalam (`ml`), English (`en`).
-  - **STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
-  - **TTS**: per-language **VITS ONNX** models via sherpa-onnx. **Currently only Bengali (`vits_bn`) is bundled**; the other 9 languages report TTS unavailable honestly. The architecture loads any `models/tts/vits_<lang>/` present.
+- **10 Indian Languages — STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
+- **Downloadable TTS Voice Packs (offline after install)**:
+  - Prototype scope is **Hindi + English**; each language pack is downloaded once, SHA-256 verified, extracted and loaded via sherpa-onnx.
+  - Verified downloadable voices exist today for **Hindi, English, Malayalam, Gujarati and Bengali** (Piper/VITS + Mimic-3/Coqui).
+  - Bengali VITS (`vits_bn`) is still bundled in the APK as a zero-download fallback.
+  - Languages without a sherpa-compatible voice (mr/kn/ta/te/or) are reported honestly as unavailable — never faked.
+  - **IndicConformer / IndicF5 are NOT runtime dependencies** of this prototype (their published checkpoints are not directly loadable through the current Android pipeline).
 - **Real Model Inference (ONNX Runtime)**:
   - **VAD**: Silero VAD (v5/v6 compatible via sherpa-onnx).
   - **STT**: OpenAI Whisper base int8 (encoder + decoder ONNX).

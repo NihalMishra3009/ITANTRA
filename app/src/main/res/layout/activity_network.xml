@@ -52,6 +52,18 @@
             android:textSize="13sp"
             android:textStyle="bold" />
 
+        <!-- Connection + security summary -->
+        <TextView
+            android:id="@+id/tvSecurity"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/bg_surface_chip"
+            android:padding="12dp"
+            android:text="STATUS"
+            android:textColor="@color/text_white"
+            android:textSize="12sp" />
+
         <!-- Neighbors -->
         <TextView
             android:id="@+id/sectionNeighbors"

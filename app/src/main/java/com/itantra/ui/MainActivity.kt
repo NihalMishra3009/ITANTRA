@@ -9,9 +9,13 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.animation.Animation
 import android.view.animation.ScaleAnimation
+import android.content.Context
 import android.widget.AdapterView
 import android.widget.ArrayAdapter
+import android.widget.ImageView
+import android.widget.TextView
 import android.widget.Toast
+import android.view.LayoutInflater
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -22,6 +26,7 @@ import com.itantra.audio.AudioFocusManager
 import com.itantra.audio.AudioPlayer
 import com.itantra.audio.AudioRecorder
 import com.itantra.databinding.ActivityMainBinding
+import com.itantra.identity.NodeIdentity
 import com.itantra.orchestrator.OperatingMode
 import com.itantra.orchestrator.PipelineOrchestrator
 import com.itantra.orchestrator.TransceiverState
@@ -29,8 +34,7 @@ import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
 import com.itantra.transport.BluetoothTransport
 import com.itantra.transport.CompositeTransport
-import com.itantra.transport.ConnectionState
-import com.itantra.transport.DeviceInfo
+import com.itantra.transport.RouteEntry
 import com.itantra.transport.TransportLayer
 import com.itantra.transport.WifiDirectTransport
 import com.itantra.tts.TtsEngine
@@ -56,6 +60,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var orchestrator: PipelineOrchestrator
 
     private var isPulsing = false
+
+    private var lastIncomingMessage: String = ""
+    private var lastSttMessage: String = ""
+
+    private val prototypeLanguages = listOf(SupportedLanguage.HINDI, SupportedLanguage.ENGLISH)
 
     private val requiredPermissions by lazy {
         val list = mutableListOf(
@@ -90,21 +99,16 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         initEngines()
-        setupLanguageSpinner()
-        setupTransportToggle()
-        setupModeSelector()
+        setupLanguageDropdown()
+        setupTransportDropdown()
         setupPttAndAlertButtons()
         setupDeviceConnection()
+        setupNavigation()
         observeOrchestratorState()
-
-        binding.btnOpenNetwork.setOnClickListener {
-            startActivity(android.content.Intent(this, NetworkActivity::class.java))
-        }
-        binding.btnOpenModels.setOnClickListener {
-            startActivity(android.content.Intent(this, LanguageModelsActivity::class.java))
-        }
+        refreshPeerState()
 
         renderStatus(TransceiverState.IDLE)
+        renderLatency(null)
 
         checkAndRequestPermissions()
     }
@@ -134,70 +138,125 @@ class MainActivity : AppCompatActivity() {
         )
         (application as com.itantra.iTantraApp).orchestrator = orchestrator
         orchestrator.speechModelManager.selectLanguage(orchestrator.currentLanguage)
+
+        // Real persistent node identity.
+        val profile = NodeIdentity.current()
+        binding.tvNodeId.text = profile?.nodeId ?: getString(R.string.node_unknown)
     }
 
-    private fun setupLanguageSpinner() {
-        val languages = SupportedLanguage.values()
-        val adapter = ArrayAdapter(
-            this,
-            android.R.layout.simple_spinner_dropdown_item,
-            languages.map { "${it.displayName} (${it.nativeName})" }
-        )
+    // ---------------- Language dropdown ----------------
+
+    private fun setupLanguageDropdown() {
+        val adapter = LanguageAdapter(this, prototypeLanguages)
         binding.spinnerLanguage.adapter = adapter
         binding.spinnerLanguage.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val selected = languages[position]
-                orchestrator.currentLanguage = selected
-                Toast.makeText(this@MainActivity, "Language: ${selected.displayName}", Toast.LENGTH_SHORT).show()
+                val lang = prototypeLanguages[position]
+                if (orchestrator.currentLanguage != lang) orchestrator.currentLanguage = lang
+                adapter.notifyDataSetChanged()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        val initial = prototypeLanguages.indexOfFirst { it == orchestrator.currentLanguage }.coerceAtLeast(0)
+        binding.spinnerLanguage.setSelection(initial)
+    }
+
+    /** Custom language dropdown: shows real STT/TTS availability per language. */
+    private inner class LanguageAdapter(context: Context, items: List<SupportedLanguage>) :
+        ArrayAdapter<SupportedLanguage>(context, 0, items) {
+
+        override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View =
+            bind(convertView, parent, position, dropdown = false)
+
+        override fun getDropDownView(position: Int, convertView: View?, parent: android.view.ViewGroup): View =
+            bind(convertView, parent, position, dropdown = true)
+
+        private fun bind(convertView: View?, parent: android.view.ViewGroup, position: Int, dropdown: Boolean): View {
+            val v = convertView ?: LayoutInflater.from(context).inflate(R.layout.item_language, parent, false)
+            val lang = getItem(position)!!
+            val smm = orchestrator.speechModelManager
+            val stt = smm.sttAvailable(lang.code)
+            val tts = smm.ttsAvailable(lang.code)
+
+            v.findViewById<TextView>(R.id.tvLangName).apply {
+                text = lang.nativeName
+                setTextColor(ContextCompat.getColor(context, if (dropdown) R.color.text_white else R.color.comm_green))
+            }
+            v.findViewById<TextView>(R.id.tvLangStatus).apply {
+                text = when {
+                    stt && tts -> "STT ✓  TTS ✓"
+                    stt -> "STT ✓  TTS ✗"
+                    tts -> "STT ✗  TTS ✓"
+                    else -> "STT ✗  TTS ✗"
+                }
+                setTextColor(
+                    ContextCompat.getColor(context, if (stt && tts) R.color.comm_green else R.color.comm_amber)
+                )
+            }
+            return v
+        }
+    }
+
+    // ---------------- Transport dropdown ----------------
+
+    private val transportOptions = arrayOf("Bluetooth", "Wi-Fi Direct")
+
+    private fun setupTransportDropdown() {
+        binding.spinnerTransport.adapter = TransportAdapter(this, transportOptions)
+        binding.spinnerTransport.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                orchestrator.setupTransportListener()
+                refreshPeerState()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
     }
 
-    private fun setupTransportToggle() {
-        binding.toggleTransport.addOnButtonCheckedListener { _, checkedId, isChecked ->
-            if (isChecked) {
-                when (checkedId) {
-                    R.id.btnTransportBt -> {
-                        binding.tvStatusDetail.text = "Bluetooth"
-                    }
-                    R.id.btnTransportWifi -> {
-                        binding.tvStatusDetail.text = "Wi-Fi Direct"
-                    }
-                }
-                // Re-setup transport listener so MeshRoutingManager uses the composite
-                orchestrator.setupTransportListener()
-            }
+    /** Custom transport dropdown items with per-transport icons. */
+    private class TransportAdapter(context: Context, items: Array<String>) :
+        ArrayAdapter<String>(context, 0, items) {
+
+        private val icons = intArrayOf(R.drawable.ic_transport_bt, R.drawable.ic_transport_wifi)
+
+        override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+            val v = inflate(convertView, parent)
+            v.findViewById<ImageView>(R.id.ivTransportIcon).backgroundTintList =
+                ContextCompat.getColorStateList(context, R.color.comm_green)
+            v.findViewById<ImageView>(R.id.ivTransportIcon).setImageResource(icons[position])
+            v.findViewById<ImageView>(R.id.ivTransportIcon).imageTintList =
+                ContextCompat.getColorStateList(context, R.color.comm_green)
+            val tv = v.findViewById<TextView>(R.id.tvTransportLabel)
+            tv.text = getItem(position)
+            tv.setTextColor(ContextCompat.getColor(context, R.color.comm_green))
+            v.background = null
+            return v
+        }
+
+        override fun getDropDownView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
+            val v = inflate(convertView, parent)
+            val icon = v.findViewById<ImageView>(R.id.ivTransportIcon)
+            icon.setImageResource(icons[position])
+            icon.imageTintList = ContextCompat.getColorStateList(context, R.color.comm_green)
+            val tv = v.findViewById<TextView>(R.id.tvTransportLabel)
+            tv.text = getItem(position)
+            tv.setTextColor(ContextCompat.getColor(context, R.color.text_white))
+            return v
+        }
+
+        private fun inflate(convertView: View?, parent: android.view.ViewGroup): View {
+            val v = convertView ?: LayoutInflater.from(context).inflate(
+                R.layout.item_transport, parent, false
+            )
+            return v
         }
     }
 
-    private fun setupModeSelector() {
-        binding.radioGroupMode.setOnCheckedChangeListener { _, checkedId ->
-            when (checkedId) {
-                R.id.radioPtt -> {
-                    orchestrator.stopContinuousListening()
-                    binding.btnPtt.visibility = View.VISIBLE
-                    binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
-                    renderStatus(orchestrator.transceiverState.value)
-                }
-                R.id.radioContinuous -> {
-                    orchestrator.startContinuousListening()
-                    // Keep the central circle visible as the status node; the touch
-                    // handler already ignores presses in continuous mode.
-                    binding.btnPtt.visibility = View.VISIBLE
-                    binding.btnPtt.text = getString(R.string.listening_active)
-                    renderStatus(orchestrator.transceiverState.value)
-                    Toast.makeText(this, "Continuous Mode Active: Listening with VAD", Toast.LENGTH_SHORT).show()
-                }
-            }
-        }
-    }
+    // ---------------- PTT + SOS ----------------
 
     @SuppressLint("ClickableViewAccessibility")
     private fun setupPttAndAlertButtons() {
-        val activeRed = ContextCompat.getColor(this, R.color.comm_red)
-
         binding.btnPtt.setOnTouchListener { _, event ->
             if (orchestrator.operatingMode == OperatingMode.CONTINUOUS) return@setOnTouchListener false
 
@@ -209,7 +268,6 @@ class MainActivity : AppCompatActivity() {
                     true
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    // Restore the state-driven color (renderStatus will re-tint on next state emit).
                     binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
                     orchestrator.onPttReleased()
                     renderStatus(orchestrator.transceiverState.value)
@@ -219,24 +277,51 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        binding.btnInfo.setOnClickListener {
+            // Incoming circle (history icon): shows real messages history.
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.messages_history))
+                .setMessage(messageHistoryText())
+                .setPositiveButton("OK", null)
+                .show()
+        }
+
+        binding.btnSttInfo.setOnClickListener {
+            // Second card (incoming message details), toggled by the bottom-left info circle.
+            val expanded = binding.tvIncomingDetails.visibility == View.GONE
+            binding.tvIncomingDetails.visibility = if (expanded) View.VISIBLE else View.GONE
+            renderIncomingDetails()
+        }
+
         binding.btnAlert.setOnClickListener {
-            Toast.makeText(this, "Broadcasting SOS ALERT Message...", Toast.LENGTH_SHORT).show()
-            orchestrator.onPttPressed(isAlert = true)
-            binding.root.postDelayed({
-                orchestrator.onPttReleased()
-            }, 1000)
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.sos_confirm_title))
+                .setMessage(getString(R.string.sos_confirm_body))
+                .setNegativeButton(getString(R.string.sos_cancel), null)
+                .setPositiveButton(getString(R.string.sos_send)) { _, _ ->
+                    Toast.makeText(this, getString(R.string.sos_active), Toast.LENGTH_SHORT).show()
+                    orchestrator.onPttPressed(isAlert = true)
+                    binding.root.postDelayed({
+                        orchestrator.onPttReleased()
+                    }, 1000)
+                }
+                .show()
         }
     }
 
+    // ---------------- Connectivity ----------------
+
     private fun setupDeviceConnection() {
-        binding.btnScanConnect.setOnClickListener {
+        val label = binding.btnScanConnect
+        label.setOnClickListener {
+            if (currentTransport?.isConnected() == true) {
+                startActivity(android.content.Intent(this, NetworkActivity::class.java))
+                return@setOnClickListener
+            }
             val transport = currentTransport ?: return@setOnClickListener
-            binding.tvStatusDetail.text = getString(R.string.nearby_devices_scan)
-            renderConnection(ConnectionState.CONNECTING)
             transport.discoverDevices { devices ->
                 runOnUiThread {
                     if (devices.isEmpty()) {
-                        binding.tvStatusDetail.text = getString(R.string.no_device)
                         Toast.makeText(this, "No nearby devices found", Toast.LENGTH_SHORT).show()
                         return@runOnUiThread
                     }
@@ -246,18 +331,14 @@ class MainActivity : AppCompatActivity() {
                         .setTitle("Select Transceiver Peer")
                         .setItems(names) { _, which ->
                             val selectedDevice = devices[which]
-                            binding.tvStatusDetail.text = "Connecting to ${selectedDevice.name}…"
-                            renderConnection(ConnectionState.CONNECTING)
                             transport.connect(selectedDevice) { success ->
-                                if (success) {
-                                    binding.tvStatusText.text = getString(R.string.connected_indicator)
-                                    binding.tvStatusDetail.text = selectedDevice.name
-                                    renderConnection(ConnectionState.CONNECTED)
-                                    orchestrator.initiateSessionHandshake()
-                                } else {
-                                    binding.tvStatusText.text = getString(R.string.connection_failed_ui)
-                                    binding.tvStatusDetail.text = getString(R.string.connection_failed_ui)
-                                    renderConnection(ConnectionState.ERROR)
+                                runOnUiThread {
+                                    if (success) {
+                                        orchestrator.initiateSessionHandshake()
+                                        refreshPeerState()
+                                    } else {
+                                        Toast.makeText(this, getString(R.string.connection_failed_ui), Toast.LENGTH_SHORT).show()
+                                    }
                                 }
                             }
                         }
@@ -268,18 +349,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun setupNavigation() {
+        binding.btnOpenModels.setOnClickListener {
+            startActivity(android.content.Intent(this, LanguageModelsActivity::class.java))
+        }
+    }
+
+    // ---------------- Observers ----------------
+
     private fun observeOrchestratorState() {
         lifecycleScope.launch {
             orchestrator.transceiverState.collectLatest { state ->
-                runOnUiThread {
-                    renderStatus(state)
-                }
+                runOnUiThread { renderStatus(state) }
             }
         }
 
         lifecycleScope.launch {
             orchestrator.lastTranscribedText.collectLatest { text ->
                 if (text.isNotBlank()) {
+                    lastSttMessage = text
                     binding.tvLastSttText.text = text
                     binding.tvLastSttText.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_white))
                 }
@@ -289,31 +377,111 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             orchestrator.lastReceivedText.collectLatest { text ->
                 if (text.isNotBlank()) {
-                    binding.tvLastReceivedText.text = text
-                    binding.tvLastReceivedText.setTextColor(ContextCompat.getColor(this@MainActivity, R.color.text_white))
+                    lastIncomingMessage = text
+                    renderIncomingDetails()
                 }
             }
         }
 
         lifecycleScope.launch {
             orchestrator.lastLatencyMetrics.collectLatest { metrics ->
-                metrics?.let {
-                    binding.tvLatencyMetrics.text =
-                        "STT: ${it.sttLatencyMs} ms    RTF: ${String.format("%.2f", it.rtf)}    " +
-                        "NET: ${it.transportLatencyMs} ms    TTS: ${it.ttsLatencyMs} ms    " +
-                        "E2E: ${it.totalE2eLatencyMs} ms"
-                    binding.tvPerfSummary.text = "${it.totalE2eLatencyMs} ms  E2E"
-                }
+                runOnUiThread { renderLatency(metrics) }
+            }
+        }
+
+        lifecycleScope.launch {
+            orchestrator.topologyTick.collectLatest {
+                runOnUiThread { refreshPeerState() }
             }
         }
 
         binding.perfChip.setOnClickListener {
             val expanded = binding.tvLatencyMetrics.visibility == View.GONE
             binding.tvLatencyMetrics.visibility = if (expanded) View.VISIBLE else View.GONE
+            renderLatency(orchestrator.lastLatencyMetrics.value)
         }
     }
 
-    /** Map existing TransceiverState to the central status visual. */
+    /** E2E + breakdown from REAL measured latencies. "—" when none exist. */
+    private fun renderLatency(metrics: com.itantra.benchmark.LatencyRecord?) {
+        if (metrics == null) {
+            binding.tvPerfSummary.text = getString(R.string.latency_placeholder)
+            binding.tvLatencyMetrics.text = getString(R.string.latency_placeholder)
+            return
+        }
+        binding.tvPerfSummary.text = getString(R.string.latency_ms, metrics.totalE2eLatencyMs)
+        binding.tvLatencyMetrics.text =
+            "STT              ${metrics.sttLatencyMs} ms\n" +
+            "Transport        ${metrics.transportLatencyMs} ms\n" +
+            "TTS              ${metrics.ttsLatencyMs} ms\n" +
+            "RTF              ${String.format("%.2f", metrics.rtf)}\n" +
+            "────────────────────────\n" +
+            "E2E              ${metrics.totalE2eLatencyMs} ms"
+        if (binding.tvLatencyMetrics.visibility == View.VISIBLE) {
+            binding.tvLatencyMetrics.visibility = View.VISIBLE
+        }
+    }
+
+    private fun renderIncomingDetails() {
+        if (binding.tvIncomingDetails.visibility != View.VISIBLE) return
+        binding.tvIncomingDetails.text = if (lastIncomingMessage.isBlank()) {
+            getString(R.string.no_message)
+        } else {
+            "${getString(R.string.incoming)} · ${orchestrator.speechModelManager.currentLanguage().displayName}\n\u201C$lastIncomingMessage\u201D"
+        }
+    }
+
+    /** Real messages history (own STT + received + delivery tracker). Never fabricated. */
+    private fun messageHistoryText(): String {
+        val sb = StringBuilder()
+        if (lastSttMessage.isNotBlank()) {
+            sb.append(getString(R.string.your_voice)).append("\n\u201C").append(lastSttMessage).append("\u201D\n\n")
+        }
+        if (lastIncomingMessage.isNotBlank()) {
+            sb.append(getString(R.string.incoming)).append("\n\u201C").append(lastIncomingMessage).append("\u201D\n\n")
+        }
+        val statuses = orchestrator.deliveryTracker.getAll().takeLast(5)
+        for (s in statuses) {
+            sb.append("• ").append(s.recipientId).append(" [").append(s.recipientMode).append("]  ")
+                .append("hops=").append(s.hopCount).append("  ").append(s.status).append("\n")
+        }
+        return if (sb.isBlank()) getString(R.string.no_message) else sb.toString().trimEnd()
+    }
+
+    /** Live peer/route/network state from Backend. Never fabricated. */
+    private fun refreshPeerState() {
+        val orch = orchestrator
+        val connected = currentTransport?.isConnected() == true
+        val neighbors = orch.meshRoutingManager?.discovery?.neighbors?.values ?: emptyList()
+        val routes: List<RouteEntry> = orch.meshRoutingManager?.discovery?.getAllRoutes() ?: emptyList()
+        val transport = binding.spinnerTransport.selectedItem?.toString() ?: "Bluetooth"
+
+        // THIS DEVICE card: connection + real peer identity.
+        if (connected && neighbors.isNotEmpty()) {
+            val n = neighbors.maxByOrNull { it.lastSeenMs }!!
+            binding.tvConnSummary.text = "● CONNECTED — ${n.nodeId}\nSecure session · ${n.displayName} · ${n.transportType}"
+            binding.tvConnSummary.setTextColor(ContextCompat.getColor(this, R.color.comm_green))
+            binding.btnScanConnect.text = getString(R.string.manage_connection)
+        } else if (connected) {
+            binding.tvConnSummary.text = getString(R.string.cta_online)
+            binding.tvConnSummary.setTextColor(ContextCompat.getColor(this, R.color.comm_green))
+            binding.btnScanConnect.text = getString(R.string.manage_connection)
+        } else {
+            binding.tvConnSummary.text = getString(R.string.cta_offline)
+            binding.tvConnSummary.setTextColor(ContextCompat.getColor(this, R.color.text_muted))
+            binding.btnScanConnect.text = getString(R.string.connect_label)
+        }
+
+        // NETWORK mini-stats — only values that actually exist.
+        val hops = routes.minOfOrNull { it.hopCount }?.toString() ?: "—"
+        val queue = orch.deliveryTracker.getAll()
+        binding.tvNetworkStats.text =
+            "Peers: ${neighbors.size}   ·   Hops: $hops   ·   Transport: $transport\n" +
+            "Security: ECDH P-256 · AES-256-GCM   ·   Queue: ${queue.size}"
+    }
+
+    // ---------------- Status rendering ----------------
+
     private fun renderStatus(state: TransceiverState) {
         val green = ContextCompat.getColor(this, R.color.comm_green)
         val amber = ContextCompat.getColor(this, R.color.comm_amber)
@@ -324,16 +492,18 @@ class MainActivity : AppCompatActivity() {
             TransceiverState.IDLE -> {
                 binding.tvStatusText.text = getString(R.string.standby_ready)
                 binding.tvStatusText.setTextColor(white)
+                binding.btnPtt.text = getString(R.string.ptt_hold_to_talk)
                 tintRadar(green, false)
             }
             TransceiverState.LISTENING -> {
-                binding.tvStatusText.text = getString(R.string.listening_active)
+                binding.tvStatusText.text = getString(R.string.listening_vad)
                 binding.tvStatusText.setTextColor(green)
                 tintRadar(green, true)
             }
             TransceiverState.TRANSCRIBING -> {
                 binding.tvStatusText.text = getString(R.string.processing_voice)
                 binding.tvStatusText.setTextColor(amber)
+                binding.tvLastSttText.text = getString(R.string.processing_voice)
                 tintRadar(amber, true)
             }
             TransceiverState.TRANSMITTING -> {
@@ -343,13 +513,13 @@ class MainActivity : AppCompatActivity() {
             }
             TransceiverState.RECEIVING -> {
                 binding.tvStatusText.text = getString(R.string.receiving)
-                binding.tvStatusText.setTextColor(amber)
-                tintRadar(amber, true)
+                binding.tvStatusText.setTextColor(green)
+                tintRadar(green, true)
             }
             TransceiverState.SYNTHESIZING -> {
                 binding.tvStatusText.text = getString(R.string.generating_voice)
-                binding.tvStatusText.setTextColor(amber)
-                tintRadar(amber, true)
+                binding.tvStatusText.setTextColor(green)
+                tintRadar(green, true)
             }
             TransceiverState.PLAYING -> {
                 binding.tvStatusText.text = getString(R.string.playing)
@@ -360,28 +530,6 @@ class MainActivity : AppCompatActivity() {
                 binding.tvStatusText.text = getString(R.string.channel_busy)
                 binding.tvStatusText.setTextColor(white)
                 tintRadar(red, true)
-                Toast.makeText(this, "Channel Busy (Half-Duplex)", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun renderConnection(state: ConnectionState) {
-        when (state) {
-            ConnectionState.CONNECTED -> {
-                binding.tvHeaderConn.text = getString(R.string.connected_indicator)
-                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_green)
-            }
-            ConnectionState.CONNECTING -> {
-                binding.tvHeaderConn.text = getString(R.string.listening_active)
-                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_amber)
-            }
-            ConnectionState.DISCONNECTED -> {
-                binding.tvHeaderConn.text = getString(R.string.offline_ready_indicator)
-                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_amber)
-            }
-            ConnectionState.ERROR -> {
-                binding.tvHeaderConn.text = getString(R.string.disconnected_indicator)
-                binding.viewStatusDot.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_red)
             }
         }
     }
@@ -396,8 +544,8 @@ class MainActivity : AppCompatActivity() {
 
             if (pulse && !isPulsing) {
                 isPulsing = true
-                val pulse = ScaleAnimation(
-                    1.0f, 1.08f, 1.0f, 1.08f,
+                val scalePulse = ScaleAnimation(
+                    1.0f, 1.06f, 1.0f, 1.06f,
                     Animation.RELATIVE_TO_SELF, 0.5f,
                     Animation.RELATIVE_TO_SELF, 0.5f
                 ).apply {
@@ -405,7 +553,7 @@ class MainActivity : AppCompatActivity() {
                     repeatMode = Animation.REVERSE
                     repeatCount = Animation.INFINITE
                 }
-                binding.radarContainer.startAnimation(pulse)
+                binding.radarContainer.startAnimation(scalePulse)
             } else if (!pulse) {
                 isPulsing = false
                 binding.radarContainer.clearAnimation()

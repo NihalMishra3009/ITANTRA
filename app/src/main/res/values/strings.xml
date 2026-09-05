@@ -2,47 +2,79 @@
     <string name="app_name">iTantra</string>
     <string name="tagline">Offline Multilingual Neural Transceiver (ISRO PS 26173)</string>
     <string name="app_subtitle">Offline Neural Transceiver</string>
+
+    <!-- Pipeline / status -->
     <string name="status_disconnected">Disconnected</string>
     <string name="status_connected">Connected</string>
-    <string name="status_listening">Listening (VAD Active)…</string>
-    <string name="status_transcribing">Transcribing (STT)…</string>
-    <string name="status_synthesizing">Synthesizing (TTS)…</string>
-    <string name="status_transmitting">Transmitting Packet…</string>
     <string name="ptt_hold_to_talk">PRESS TO TALK</string>
     <string name="ptt_release_to_send">RELEASE TO SEND</string>
-    <string name="alert_mode_btn">ALERT / SOS</string>
-    <string name="mode_ptt">Push-To-Talk (PTT)</string>
-    <string name="mode_continuous">Continuous Conversation</string>
-
-    <!-- New UI strings -->
-    <string name="emergency_sos">EMERGENCY SOS</string>
-    <string name="your_voice">YOUR VOICE</string>
-    <string name="remote">REMOTE</string>
-    <string name="awaiting_voice">Hold the talk button to speak…</string>
-    <string name="no_incoming">No incoming messages yet</string>
-    <string name="select_language">Select language</string>
-    <string name="language">LANGUAGE</string>
-    <string name="transport_label">LINK</string>
-    <string name="connect_label">CONNECT</string>
-    <string name="mode_label">MODE</string>
-    <string name="standby_ready">READY</string>
     <string name="listening_active">LISTENING</string>
-    <string name="processing_voice">PROCESSING VOICE</string>
-    <string name="transmitting">TRANSMITTING</string>
+    <string name="listening_vad">LISTENING • VAD</string>
+
+    <!-- Core status labels -->
+    <string name="standby_ready">READY</string>
+    <string name="processing_voice">TRANSCRIBING…</string>
+    <string name="transmitting">SENDING</string>
+    <string name="transmitting_securing">SECURING</string>
+    <string name="securing">SECURING</string>
     <string name="receiving">RECEIVING</string>
-    <string name="generating_voice">GENERATING VOICE</string>
+    <string name="generating_voice">ON-DEVICE TTS</string>
     <string name="playing">PLAYING</string>
     <string name="channel_busy">CHANNEL BUSY</string>
-    <string name="connected_indicator">CONNECTED</string>
-    <string name="offline_ready_indicator">OFFLINE READY</string>
-    <string name="disconnected_indicator">OFFLINE</string>
+    <string name="retry">RETRY</string>
+
+    <!-- Connectivity -->
     <string name="no_device">No device</string>
-    <string name="e2e_metric">E2E</string>
-    <string name="stt_metric">STT</string>
-    <string name="network_metric">NET</string>
-    <string name="tts_metric">TTS</string>
-    <string name="rtf_metric">RTF</string>
+    <string name="cta_offline">● OFFLINE — No peer connected</string>
+    <string name="cta_online">● CONNECTED — Secure session</string>
+    <string name="connect_label">CONNECT DEVICE</string>
+    <string name="manage_connection">MANAGE CONNECTION</string>
     <string name="nearby_devices_scan">Scanning nearby devices…</string>
     <string name="peer_placeholder">Not connected</string>
     <string name="connection_failed_ui">CONNECTION FAILED</string>
+
+    <!-- Sections -->
+    <string name="your_voice">YOUR MESSAGE</string>
+    <string name="incoming">INCOMING</string>
+    <string name="messages_history">MESSAGES HISTORY</string>
+    <string name="awaiting_voice">Speak using Push-To-Talk</string>
+    <string name="no_message">No message received yet</string>
+    <string name="select_language">Select language</string>
+    <string name="language">LANGUAGE</string>
+    <string name="this_device">THIS DEVICE</string>
+    <string name="node_unknown">ITN-UNKNOWN</string>
+
+    <!-- Model status -->
+    <string name="stt_metric">STT</string>
+    <string name="tts_metric">TTS</string>
+    <string name="rtf_metric">RTF</string>
+    <string name="network_metric">NET</string>
+    <string name="e2e_metric">E2E</string>
+    <string name="model_ready">STT ✓  TTS ✓  (offline)</string>
+    <string name="model_stt_install">STT Install</string>
+    <string name="model_tts_install">TTS Install</string>
+    <string name="stt_installed">STT ✓ Installed</string>
+    <string name="tts_installed">TTS ✓ Installed</string>
+    <string name="stt_not_installed">STT \u2014 Not installed</string>
+    <string name="tts_not_installed">TTS \u2014 Not installed</string>
+    <string name="model_hint_install">Manage in MODELS</string>
+
+    <!-- Latency -->
+    <string name="latency_placeholder">—</string>
+    <string name="latency_e2e_prefix">E2E LATENCY</string>
+    <string name="latency_ms">%1$d ms</string>
+
+    <!-- Emergency SOS -->
+    <string name="emergency_sos">🚨 EMERGENCY SOS</string>
+    <string name="sos_confirm_title">SEND EMERGENCY SOS?</string>
+    <string name="sos_confirm_body">This will broadcast a high-priority emergency message through the network.</string>
+    <string name="sos_cancel">CANCEL</string>
+    <string name="sos_send">SEND SOS</string>
+    <string name="sos_active">🚨 SOS ACTIVE</string>
+    <string name="sos_broadcasting">Broadcasting emergency message…</string>
+
+    <!-- Network / models screens -->
+    <string name="fatal_error">FATAL ERROR</string>
+    <string name="model_screen_title">OFFLINE LANGUAGE MODELS</string>
+    <string name="model_screen_subtitle">Download only the languages you need.\nInference works without internet.</string>
 </resources>

@@ -32,19 +32,20 @@ The rest of ITANTRA (pipeline, UI, networking) talks only to `SpeechModelManager
 
 | Role | Target model | Runtime | Status |
 |------|--------------|---------|--------|
-| STT | **IndicConformer INT8** (mobile-optimized) | sherpa-onnx Paraformer | CANDIDATE (weights not bundled) |
+| STT | **IndicConformer INT8** (mobile-optimized) | sherpa-onnx Paraformer | NOT a runtime dependency (published checkpoint is custom-split, not loadable as-is) |
 | STT | Whisper base int8 (existing fallback) | sherpa-onnx | ACTIVE (covers all 10 langs) |
-| TTS | **IndicF5 INT8** (high-quality, mobile-optimized) | sherpa-onnx | CANDIDATE (weights not bundled) |
-| TTS | VITS (existing, per-lang) | sherpa-onnx | ACTIVE for Bengali only |
+| TTS | **IndicF5 INT8** (high-quality, mobile-optimized) | sherpa-onnx | NOT a runtime dependency (safetensors, no English support, needs conversion) |
+| TTS | VITS / Piper voice packs (downloadable) | sherpa-onnx | ACTIVE for hi, en, ml, gu, bn |
+| TTS | VITS bn (bundled fallback) | sherpa-onnx | ACTIVE |
 | VAD | Silero | sherpa-onnx | asset present but v4 incompatible → energy fallback |
 
 A pack is only considered `available` when its file actually exists (bundled asset OR downloaded to app-private storage). `bestAvailable(lang, role, deviceClass)` returns the highest-quality available pack the device can afford.
 
-Note: IndicConformer (STT) and IndicF5 (TTS) are the user-confirmed primary targets and are scored / ranked as HIGH quality; when their INT8 ONNX weights are bundled or downloaded, they are selected first, falling back to the existing Whisper / VITS.
+Note: IndicConformer (STT) and IndicF5 (TTS) are NOT runtime dependencies of this prototype — their published checkpoints cannot be loaded through the current Android pipeline as-is. The catalog records them honestly as unpublished (downloadUrl = null) and the active pipeline uses Whisper STT + downloadable VITS/Piper TTS packs.
 
 ## 4. Model Distribution — Download-Once, Then Offline
 
-The app ships a **small APK** with no per-language model weights bundled. Language models are delivered as **download-once packs**:
+The app ships a **small APK** with Whisper base int8 + Bengali VITS bundled. Per-language voices are delivered as **download-once packs**:
 
 ```
 user picks a language
@@ -68,4 +69,4 @@ user picks a language
 
 ## 6. Deployment Reality
 
-The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **VITS** with **only Bengali** bundled today. IndicConformer / IndicF5 are the confirmed primary targets, declared as INT8 mobile-optimized candidate packs; their ONNX weights are delivered via download-once (catalog to be populated with licensed artifacts). This is reported honestly in the UI/diagnostics.
+The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **VITS/Piper** with bundled Bengali fallback plus downloadable voice packs for hi, en, ml, gu, bn. IndicConformer / IndicF5 are cataloged but **not runtime dependencies** of this prototype. This is reported honestly in the UI/diagnostics.

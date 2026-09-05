@@ -10,145 +10,190 @@
     <ScrollView
         android:layout_width="match_parent"
         android:layout_height="match_parent"
+        android:descendantFocusability="blocksDescendants"
         android:fillViewport="true"
         android:overScrollMode="never">
 
-        <androidx.constraintlayout.widget.ConstraintLayout
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
+            android:orientation="vertical"
             android:paddingHorizontal="20dp"
-            android:paddingTop="16dp"
+            android:paddingTop="14dp"
             android:paddingBottom="28dp">
 
             <!-- ================= HEADER ================= -->
-            <TextView
-                android:id="@+id/tvHeaderTitle"
-                android:layout_width="wrap_content"
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:letterSpacing="0.08"
-                android:text="iTANTRA"
-                android:textColor="@color/text_white"
-                android:textSize="22sp"
-                android:textStyle="bold"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toTopOf="parent" />
+                android:orientation="horizontal"
+                android:gravity="center_vertical">
 
-            <TextView
-                android:id="@+id/tvHeaderSub"
-                android:layout_width="wrap_content"
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/tvHeaderTitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:fontFamily="sans-serif-condensed"
+                        android:letterSpacing="0.1"
+                        android:text="iTANTRA"
+                        android:textColor="@color/text_white"
+                        android:textSize="22sp"
+                        android:textStyle="bold" />
+
+                    <TextView
+                        android:id="@+id/tvHeaderSub"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.16"
+                        android:text="@string/app_subtitle"
+                        android:textAllCaps="true"
+                        android:textColor="@color/text_faint"
+                        android:textSize="10sp" />
+                </LinearLayout>
+
+                <LinearLayout
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="center_vertical"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btnOpenModels"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:background="@drawable/bg_button_rounded"
+                        android:backgroundTint="@color/bg_surface_raised"
+                        android:paddingHorizontal="16dp"
+                        android:paddingVertical="9dp"
+                        android:text="MODELS"
+                        android:textAllCaps="true"
+                        android:textColor="@color/comm_green"
+                        android:textSize="11sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ================= THIS DEVICE ================= -->
+            <LinearLayout
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:letterSpacing="0.2"
-                android:text="@string/app_subtitle"
-                android:textAllCaps="true"
-                android:textColor="@color/text_faint"
-                android:textSize="11sp"
-                app:layout_constraintStart_toStartOf="@id/tvHeaderTitle"
-                app:layout_constraintTop_toBottomOf="@id/tvHeaderTitle" />
-
-            <!-- Connection indicator (right of header) -->
-            <View
-                android:id="@+id/viewStatusDot"
-                android:layout_width="12dp"
-                android:layout_height="12dp"
-                android:background="@drawable/bg_status_dot"
-                android:backgroundTint="@color/comm_amber"
-                app:layout_constraintBottom_toTopOf="@id/tvHeaderSub"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
-
-            <!-- Network Map / Diagnostics launcher -->
-            <TextView
-                android:id="@+id/btnOpenNetwork"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
+                android:layout_marginTop="14dp"
                 android:background="@drawable/bg_surface_chip"
-                android:paddingHorizontal="14dp"
-                android:paddingVertical="8dp"
-                android:clickable="true"
-                android:focusable="true"
-                android:text="NETWORK"
-                android:textAllCaps="true"
-                android:textColor="@color/comm_green"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                app:layout_constraintBottom_toTopOf="@id/viewStatusDot"
-                app:layout_constraintEnd_toEndOf="@id/viewStatusDot"
-                app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
+                android:orientation="vertical"
+                android:padding="12dp">
 
-            <!-- Language Models launcher -->
-            <TextView
-                android:id="@+id/btnOpenModels"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="@drawable/bg_surface_chip"
-                android:paddingHorizontal="14dp"
-                android:paddingVertical="8dp"
-                android:clickable="true"
-                android:focusable="true"
-                android:text="MODELS"
-                android:textAllCaps="true"
-                android:textColor="@color/comm_green"
-                android:textSize="11sp"
-                android:textStyle="bold"
-                app:layout_constraintBottom_toBottomOf="@id/btnOpenNetwork"
-                app:layout_constraintEnd_toStartOf="@id/btnOpenNetwork"
-                app:layout_constraintTop_toTopOf="@id/btnOpenNetwork" />
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
 
-            <TextView
-                android:id="@+id/tvHeaderConn"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:letterSpacing="0.12"
-                android:text="@string/offline_ready_indicator"
-                android:textAllCaps="true"
-                android:textColor="@color/text_muted"
-                android:textSize="10sp"
-                app:layout_constraintBottom_toTopOf="@id/tvHeaderSub"
-                app:layout_constraintEnd_toStartOf="@id/viewStatusDot"
-                app:layout_constraintTop_toTopOf="@id/tvHeaderTitle" />
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:letterSpacing="0.14"
+                        android:text="THIS DEVICE"
+                        android:textAllCaps="true"
+                        android:textColor="@color/text_faint"
+                        android:textSize="10sp" />
 
-            <!-- ================= CENTRAL STATUS VISUAL ================= -->
+                    <TextView
+                        android:id="@+id/tvNodeId"
+                        android:layout_width="0dp"
+                        android:layout_height="wrap_content"
+                        android:layout_marginStart="10dp"
+                        android:layout_weight="1"
+                        android:gravity="end"
+                        android:fontFamily="monospace"
+                        android:text="ITN-UNKNOWN"
+                        android:textColor="@color/comm_green"
+                        android:textSize="14sp"
+                        android:textStyle="bold" />
+                </LinearLayout>
+
+                <!-- Connection summary from real backend -->
+                <TextView
+                    android:id="@+id/tvConnSummary"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:text="@string/cta_offline"
+                    android:textColor="@color/text_muted"
+                    android:textSize="12sp" />
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="10dp"
+                    android:gravity="center_vertical"
+                    android:orientation="horizontal">
+
+                    <TextView
+                        android:id="@+id/btnScanConnect"
+                        android:layout_width="0dp"
+                        android:layout_height="42dp"
+                        android:layout_weight="1"
+                        android:background="@drawable/bg_button_rounded"
+                        android:backgroundTint="@color/bg_surface_raised"
+                        android:gravity="center"
+                        android:text="@string/connect_label"
+                        android:textAllCaps="true"
+                        android:textColor="@color/comm_green"
+                        android:textSize="12sp"
+                        android:textStyle="bold" />
+
+                    <Spinner
+                        android:id="@+id/spinnerTransport"
+                        android:layout_width="wrap_content"
+                        android:layout_height="42dp"
+                        android:layout_marginStart="8dp"
+                        android:background="@drawable/bg_button_rounded"
+                        android:backgroundTint="@color/comm_green_dim"
+                        android:popupBackground="@drawable/bg_popup"
+                        android:paddingHorizontal="14dp"
+                        android:dropDownVerticalOffset="4dp" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- ================= RADAR + ACTION ================= -->
             <FrameLayout
                 android:id="@+id/radarContainer"
-                android:layout_width="0dp"
-                android:layout_height="0dp"
-                android:layout_marginTop="24dp"
-                app:layout_constraintDimensionRatio="1:1"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvHeaderSub">
+                android:layout_width="match_parent"
+                android:layout_height="272dp"
+                android:layout_marginTop="12dp"
+                android:clipChildren="false">
 
                 <View
                     android:id="@+id/radarRingOuter"
-                    android:layout_width="match_parent"
-                    android:layout_height="match_parent"
-                    android:alpha="0.35"
+                    android:layout_width="160dp"
+                    android:layout_height="160dp"
+                    android:layout_gravity="center"
+                    android:layout_marginTop="14dp"
+                    android:alpha="0.3"
                     android:background="@drawable/ring_outer" />
 
                 <View
                     android:id="@+id/radarRingMid"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
+                    android:layout_width="120dp"
+                    android:layout_height="120dp"
                     android:layout_gravity="center"
-                    android:layout_margin="24dp"
+                    android:layout_marginTop="14dp"
                     android:alpha="0.5"
                     android:background="@drawable/ring_mid" />
 
-                <View
-                    android:id="@+id/radarRingInner"
-                    android:layout_width="0dp"
-                    android:layout_height="0dp"
-                    android:layout_gravity="center"
-                    android:layout_margin="54dp"
-                    android:alpha="0.7"
-                    android:background="@drawable/ring_inner" />
-
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnPtt"
-                    android:layout_width="172dp"
-                    android:layout_height="172dp"
+                    android:layout_width="132dp"
+                    android:layout_height="132dp"
                     android:layout_gravity="center"
+                    android:layout_marginTop="14dp"
                     android:background="@drawable/status_node"
                     android:backgroundTint="@null"
                     android:insetTop="0dp"
@@ -156,298 +201,225 @@
                     android:stateListAnimator="@null"
                     android:text="@string/ptt_hold_to_talk"
                     android:textColor="@color/bg_black"
-                    android:textSize="13sp"
+                    android:textSize="12sp"
                     android:textStyle="bold"
-                    app:cornerRadius="86dp"
+                    app:cornerRadius="66dp"
                     app:icon="@drawable/ic_mic"
                     app:iconGravity="textStart"
-                    app:iconSize="22dp"
+                    app:iconSize="20dp"
                     app:iconTint="@color/bg_black"
                     app:rippleColor="@android:color/transparent" />
 
                 <View
                     android:id="@+id/statusNodeGlow"
-                    android:layout_width="150dp"
-                    android:layout_height="150dp"
+                    android:layout_width="110dp"
+                    android:layout_height="110dp"
                     android:layout_gravity="center"
+                    android:layout_marginTop="14dp"
                     android:alpha="0.15"
                     android:background="@drawable/status_node" />
+
+                <!-- Language dropdown — top-left above PTT -->
+                <Spinner
+                    android:id="@+id/spinnerLanguage"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_gravity="top|start"
+                    android:layout_margin="6dp"
+                    android:background="@drawable/bg_button_rounded"
+                    android:backgroundTint="@color/bg_surface_raised"
+                    android:popupBackground="@drawable/bg_popup"
+                    android:paddingHorizontal="12dp"
+                    android:dropDownVerticalOffset="4dp" />
+
+                <!-- Incoming message circle (history icon) — top-right above PTT -->
+                <FrameLayout
+                    android:id="@+id/btnInfo"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:layout_gravity="top|end"
+                    android:layout_margin="6dp"
+                    android:background="@drawable/bg_button_rounded"
+                    android:backgroundTint="@color/bg_surface_raised"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="@string/incoming">
+
+                    <ImageView
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_history"
+                        app:tint="@color/comm_green" />
+                </FrameLayout>
             </FrameLayout>
 
-            <!-- Central status text -->
+            <!-- Bottom buttons row — below radar, above READY (own layer) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <FrameLayout
+                    android:id="@+id/btnSttInfo"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_button_rounded"
+                    android:backgroundTint="@color/bg_surface_raised"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="@string/incoming">
+
+                    <ImageView
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_info"
+                        app:tint="@color/comm_green" />
+                </FrameLayout>
+
+                <View
+                    android:layout_width="0dp"
+                    android:layout_height="1dp"
+                    android:layout_weight="1" />
+
+                <FrameLayout
+                    android:id="@+id/btnAlert"
+                    android:layout_width="40dp"
+                    android:layout_height="40dp"
+                    android:background="@drawable/bg_button_rounded"
+                    android:backgroundTint="@color/bg_surface_raised"
+                    android:clickable="true"
+                    android:focusable="true"
+                    android:contentDescription="@string/emergency_sos">
+
+                    <ImageView
+                        android:layout_width="18dp"
+                        android:layout_height="18dp"
+                        android:layout_gravity="center"
+                        android:contentDescription="@null"
+                        android:scaleType="fitCenter"
+                        android:src="@drawable/ic_emergency"
+                        app:tint="@color/comm_red" />
+                </FrameLayout>
+            </LinearLayout>
+
+            <!-- Pipeline state / status (plain text) -->
             <TextView
                 android:id="@+id/tvStatusText"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
-                android:letterSpacing="0.24"
+                android:layout_marginTop="2dp"
+                android:gravity="center"
+                android:letterSpacing="0.18"
                 android:text="@string/standby_ready"
                 android:textAllCaps="true"
                 android:textColor="@color/text_white"
-                android:textSize="30sp"
-                android:textStyle="bold"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/radarContainer" />
+                android:textSize="22sp"
+                android:textStyle="bold" />
 
+            <!-- Incoming message details (second card; shown by bottom-left info button) -->
             <TextView
-                android:id="@+id/tvStatusDetail"
-                android:layout_width="0dp"
+                android:id="@+id/tvIncomingDetails"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
-                android:layout_marginEnd="10dp"
-                android:text="@string/peer_placeholder"
+                android:background="@drawable/bg_surface_chip"
+                android:padding="12dp"
+                android:text="@string/no_message"
                 android:textColor="@color/text_muted"
                 android:textSize="13sp"
-                app:layout_constraintEnd_toStartOf="@id/btnScanConnect"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvStatusText" />
+                android:visibility="gone" />
 
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnScanConnect"
-                style="@style/Widget.Material3.Button.TonalButton"
-                android:layout_width="wrap_content"
-                android:layout_height="44dp"
-                android:paddingHorizontal="16dp"
-                android:text="@string/connect_label"
-                android:textColor="@color/text_white"
-                android:textSize="12sp"
-                app:cornerRadius="22dp"
-                app:icon="@drawable/ic_connect"
-                app:iconGravity="textStart"
-                app:iconTint="@color/comm_green"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintTop_toTopOf="@id/tvStatusText" />
-
-            <!-- ================= LANGUAGE / LINK / CONNECT CONTROL ROW ================= -->
-            <TextView
-                android:id="@+id/tvLanguageLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="24dp"
-                android:letterSpacing="0.16"
-                android:text="@string/language"
-                android:textAllCaps="true"
-                android:textColor="@color/text_faint"
-                android:textSize="10sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvStatusDetail" />
-
-            <Spinner
-                android:id="@+id/spinnerLanguage"
-                android:layout_width="0dp"
-                android:layout_height="52dp"
-                android:layout_marginTop="6dp"
-                android:background="@drawable/bg_surface_chip"
-                android:paddingHorizontal="16dp"
-                app:layout_constraintEnd_toStartOf="@id/toggleTransport"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvLanguageLabel" />
-
-            <com.google.android.material.button.MaterialButtonToggleGroup
-                android:id="@+id/toggleTransport"
-                android:layout_width="wrap_content"
-                android:layout_height="52dp"
-                android:layout_marginStart="10dp"
-                app:checkedButton="@+id/btnTransportBt"
-                app:selectionRequired="true"
-                app:singleSelection="true"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintTop_toTopOf="@id/spinnerLanguage">
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnTransportBt"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
-                    android:paddingHorizontal="16dp"
-                    android:text="BT"
-                    android:textColor="@color/text_white"
-                    android:textSize="13sp" />
-
-                <com.google.android.material.button.MaterialButton
-                    android:id="@+id/btnTransportWifi"
-                    style="@style/Widget.Material3.Button.TextButton"
-                    android:layout_width="wrap_content"
-                    android:layout_height="match_parent"
-                    android:paddingHorizontal="16dp"
-                    android:text="Wi-Fi"
-                    android:textColor="@color/text_white"
-                    android:textSize="13sp" />
-            </com.google.android.material.button.MaterialButtonToggleGroup>
-
-            <!-- ================= OPERATING MODE ================= -->
-            <TextView
-                android:id="@+id/tvModeLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="22dp"
-                android:letterSpacing="0.16"
-                android:text="@string/mode_label"
-                android:textAllCaps="true"
-                android:textColor="@color/text_faint"
-                android:textSize="10sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/spinnerLanguage" />
-
-            <RadioGroup
-                android:id="@+id/radioGroupMode"
-                android:layout_width="0dp"
-                android:layout_height="52dp"
-                android:layout_marginTop="6dp"
-                android:background="@drawable/bg_surface_chip"
-                android:checkedButton="@+id/radioPtt"
-                android:orientation="horizontal"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvModeLabel">
-
-                <RadioButton
-                    android:id="@+id/radioPtt"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:button="@android:color/transparent"
-                    android:gravity="center"
-                    android:text="@string/mode_ptt"
-                    android:textColor="@color/text_white"
-                    android:textSize="13sp" />
-
-                <RadioButton
-                    android:id="@+id/radioContinuous"
-                    android:layout_width="0dp"
-                    android:layout_height="match_parent"
-                    android:layout_weight="1"
-                    android:button="@android:color/transparent"
-                    android:gravity="center"
-                    android:text="@string/mode_continuous"
-                    android:textColor="@color/text_white"
-                    android:textSize="13sp" />
-            </RadioGroup>
-
-            <!-- ================= MESSAGE TRANSCRIPTS ================= -->
-            <TextView
-                android:id="@+id/tvYourVoiceLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="22dp"
-                android:letterSpacing="0.16"
-                android:text="@string/your_voice"
-                android:textAllCaps="true"
-                android:textColor="@color/comm_green"
-                android:textSize="10sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/radioGroupMode" />
-
-            <TextView
-                android:id="@+id/tvLastSttText"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:background="@drawable/bg_surface_chip"
-                android:padding="14dp"
-                android:text="@string/awaiting_voice"
-                android:textColor="@color/text_muted"
-                android:textSize="16sp"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvYourVoiceLabel" />
-
-            <TextView
-                android:id="@+id/tvRemoteLabel"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="16dp"
-                android:letterSpacing="0.16"
-                android:text="@string/remote"
-                android:textAllCaps="true"
-                android:textColor="@color/text_faint"
-                android:textSize="10sp"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvLastSttText" />
-
-            <TextView
-                android:id="@+id/tvLastReceivedText"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:background="@drawable/bg_surface_chip"
-                android:padding="14dp"
-                android:text="@string/no_incoming"
-                android:textColor="@color/text_muted"
-                android:textSize="16sp"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvRemoteLabel" />
-
-            <!-- ================= PERFORMANCE CHIP ================= -->
+            <!-- Latency summary (real) -->
             <LinearLayout
                 android:id="@+id/perfChip"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="18dp"
+                android:layout_gravity="end"
+                android:layout_marginTop="24dp"
                 android:background="@drawable/bg_surface_chip"
                 android:gravity="center_vertical"
                 android:orientation="horizontal"
                 android:paddingHorizontal="14dp"
                 android:paddingVertical="10dp"
                 android:clickable="true"
-                android:focusable="true"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvLastReceivedText">
+                android:focusable="true">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.14"
+                    android:text="E2E LATENCY"
+                    android:textAllCaps="true"
+                    android:textColor="@color/text_faint"
+                    android:textSize="10sp" />
 
                 <TextView
                     android:id="@+id/tvPerfSummary"
-                    android:layout_width="wrap_content"
+                    android:layout_width="0dp"
                     android:layout_height="wrap_content"
-                    android:text="0 ms E2E"
-                    android:textColor="@color/text_muted"
-                    android:textSize="13sp" />
-                <ImageView
-                    android:layout_width="16dp"
-                    android:layout_height="16dp"
-                    android:layout_marginStart="8dp"
-                    android:contentDescription="@string/e2e_metric"
-                    android:src="@drawable/ic_chevron_down" />
+                    android:layout_marginStart="12dp"
+                    android:layout_weight="1"
+                    android:gravity="end"
+                    android:text="@string/latency_placeholder"
+                    android:textColor="@color/text_white"
+                    android:textSize="15sp"
+                    android:textStyle="bold" />
             </LinearLayout>
 
-            <!-- Expanded metrics (initially hidden) -->
             <TextView
                 android:id="@+id/tvLatencyMetrics"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_surface_chip"
+                android:padding="12dp"
+                android:text="@string/latency_placeholder"
+                android:textColor="@color/text_muted"
+                android:textSize="12sp"
+                android:visibility="gone" />
+
+            <!-- ================= YOUR MESSAGE (first card) ================= -->
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:letterSpacing="0.14"
+                android:text="@string/your_voice"
+                android:textAllCaps="true"
+                android:textColor="@color/comm_green"
+                android:textSize="10sp" />
+
+            <TextView
+                android:id="@+id/tvLastSttText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:background="@drawable/bg_surface_chip"
+                android:padding="12dp"
+                android:text="@string/awaiting_voice"
+                android:textColor="@color/text_muted"
+                android:textSize="16sp" />
+
+            <!-- ================= NETWORK MINI STATS ================= -->
+            <TextView
+                android:id="@+id/tvNetworkStats"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:background="@drawable/bg_surface_chip"
-                android:padding="12dp"
-                android:text="STT: 0ms | RTF: 0.00 | NET: 0ms | TTS: 0ms | E2E: 0ms"
+                android:padding="10dp"
                 android:textColor="@color/text_muted"
-                android:textSize="12sp"
-                android:visibility="gone"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/perfChip" />
+                android:textSize="11sp" />
 
             <!-- ================= EMERGENCY SOS ================= -->
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/btnAlert"
-                android:layout_width="0dp"
-                android:layout_height="64dp"
-                android:layout_marginTop="24dp"
-                android:background="@drawable/bg_sos"
-                android:backgroundTint="@null"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:stateListAnimator="@null"
-                android:text="@string/emergency_sos"
-                android:textColor="@color/bg_black"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                app:cornerRadius="20dp"
-                app:icon="@drawable/ic_sos_shield"
-                app:iconGravity="textStart"
-                app:iconTint="@color/bg_black"
-                app:layout_constraintEnd_toEndOf="parent"
-                app:layout_constraintStart_toStartOf="parent"
-                app:layout_constraintTop_toBottomOf="@id/tvLatencyMetrics" />
-
-        </androidx.constraintlayout.widget.ConstraintLayout>
+        </LinearLayout>
     </ScrollView>
 </androidx.constraintlayout.widget.ConstraintLayout>
