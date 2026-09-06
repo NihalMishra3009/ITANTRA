@@ -208,22 +208,46 @@ class ModelDistributionManager(
     }
 
     /**
-     * Extract a .tar.bz2 archive (sherpa-onnx TTS voice OR Whisper pack) into the
-     * pack directory. Preserves EVERY .onnx by its original filename (Whisper packs
-     * ship encoder.onnx + decoder.onnx) plus tokens.txt, and espeak-ng-data for
+     * Extract a .tar.gz or .tar.bz2 archive (sherpa-onnx TTS voice OR Whisper pack)
+     * into the pack directory. Preserves EVERY .onnx by its original filename (Whisper
+     * packs ship encoder.onnx + decoder.onnx) plus tokens.txt, and espeak-ng-data for
      * Piper voices. Writes atomically. Uses Apache Commons Compress.
+     *
+     * Gzip archives decompress ~10-20x faster than bzip2 on device — MMS-style big
+     * voices (100+ MB) MUST ship as .tar.gz to keep install latency acceptable.
      */
     private fun extractArchiveInto(targetDir: File, archive: File, onProgress: (Float) -> Unit) {
         val tmpExtract = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
-        val bz2 = org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream(
-            archive.inputStream()
-        )
+        val archiveName = archive.name.lowercase()
+        // Sniff decompressor: .tar.gz / .tgz → gzip (fast), else bzip2 (legacy Piper packs).
+        var isGzip = archiveName.endsWith(".tar.gz") || archiveName.endsWith(".tgz")
+        if (!isGzip) {
+            try {
+                archive.inputStream().use { s ->
+                    val magic = ByteArray(2)
+                    val n = s.read(magic)
+                    isGzip = n == 2 && (magic[0].toInt() and 0xFF) == 0x1F && (magic[1].toInt() and 0xFF) == 0x8B
+                }
+            } catch (_: Exception) { }
+        }
+        val totalBytes = archive.length().coerceAtLeast(1L)
+        val bz2 = if (isGzip) {
+            org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(
+                archive.inputStream()
+            )
+        } else {
+            org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream(
+                archive.inputStream()
+            )
+        }
         val tar = org.apache.commons.compress.archivers.tar.TarArchiveInputStream(bz2)
         try {
             var entry: org.apache.commons.compress.archivers.tar.TarArchiveEntry?
             var onnxFound = false
             var tokensFound = false
             var espeakFound = false
+            var bytesConsumed = 0L
+            var lastProgress = -1
             val buf = ByteArray(128 * 1024)
             while (tar.nextEntry.also { entry = it } != null) {
                 val e = entry ?: continue
@@ -251,6 +275,15 @@ class ModelDistributionManager(
                     while (tar.read(buf).also { n = it } != -1) {
                         out.write(buf, 0, n)
                         written += n
+                        bytesConsumed += n
+                        // Real extract progress = decompressed bytes / compressed file size
+                        // (a compressed MB still reads ~1 compressed MB of the download).
+                        val p = (bytesConsumed.toDouble() / totalBytes).toFloat()
+                        val idx = (p * 100).toInt()
+                        if (idx != lastProgress) {
+                            lastProgress = idx
+                            onProgress((0.05f + p * 0.90f).coerceAtMost(0.95f))
+                        }
                     }
                 }
                 if (isOnnx) {

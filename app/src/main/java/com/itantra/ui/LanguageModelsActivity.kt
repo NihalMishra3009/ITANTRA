@@ -275,7 +275,7 @@ class LanguageModelsActivity : AppCompatActivity() {
 
     private fun statusVerb(s: PackStatus): String = when (s) {
         PackStatus.DOWNLOADING -> "Downloading"
-        PackStatus.VERIFYING -> "Verifying SHA-256…"
+        PackStatus.VERIFYING -> "Installing…"
         PackStatus.LOADING -> "Loading…"
         PackStatus.FAILED -> "Failed"
         PackStatus.CORRUPTED -> "Corrupted"
@@ -316,7 +316,7 @@ class LanguageModelsActivity : AppCompatActivity() {
         smm.installLanguagePack(
             pack,
             onProgress = { f -> runOnUiThread {
-                progress.text = "Downloading ${(f * 100).toInt()}%"
+                progress.text = "Installing ${(f * 100).toInt()}%"
             } },
             onDone = { result -> runOnUiThread {
                 if (result.isSuccess && pack.role == ModelRole.TTS) {

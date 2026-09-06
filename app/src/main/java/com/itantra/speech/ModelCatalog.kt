@@ -243,15 +243,16 @@ object ModelCatalog {
     private const val MMS_RELEASE_BASE =
         "https://github.com/NihalMishra3009/ITANTRA/releases/download/mms-tts"
 
-    /** tar.bz2 archive SHA-256 (the thing actually downloaded + verified). */
+    /** tar.gz archive SHA-256 (the thing actually downloaded + verified).
+     *  Gzip (not bzip2) so on-device decompression stays fast for 100+ MB voices. */
     private val mmsSha = mapOf(
-        "mr" to "fe4125718f5023e8fb1854199cfe145a2e54bb2efc26c5c329f914176ffacfcd",
-        "kn" to "4f17983600ea2a56a01bc9dc86dc2a328e4c925dfb7f4e019b3ec6bb505c7698",
-        "ta" to "7a3b2233cd546ff9b79852b9c63758e325d9d62aab436fe1976ee4ac89fa8fd4",
-        "te" to "cb1222f7301e46d7e597d671c27f712d094c5d93d50d2dd49c47fc28ed2051bb",
-        "or" to "a564d7f91d98b4311302ef5800168918ebbf6a887a94e834c3f233bc344c11c5"
+        "mr" to "a40cbcf76a13bd55094bcf017e36be9f5df800807472adf8590f95a1f8ee375c",
+        "kn" to "499cbc0f7962ed1ac2ed3369956af983969853aceb59279475db247be6f006fb",
+        "ta" to "1927df6ef8597d9835c88fb6e5792961acd0d114b5cdaf286effb12e875034ef",
+        "te" to "b1a1bed9e57eb9424f44f974b13f324f2e5ff2f4fabd3bdf2f9e5450a59b046c",
+        "or" to "49c4d896aca203f044cadfa34c45d9e74a525749f317293ff5223b42d02affc6"
     )
-    private val mmsSize = mapOf("mr" to 107_756_072L, "kn" to 107_749_974L, "ta" to 107_733_234L, "te" to 107_768_327L, "or" to 107_748_930L)
+    private val mmsSize = mapOf("mr" to 105_212_556L, "kn" to 105_217_059L, "ta" to 105_196_329L, "te" to 105_217_400L, "or" to 105_211_124L)
 
     /** Real Meta MMS-TTS voice, checksum/size pinned from the hosted archive. */
     private fun mmsPack(code: String): LanguageModelPack {
@@ -272,7 +273,7 @@ object ModelCatalog {
             quantization = Quantization.FP32,
             sampleRate = 16000,
             supportedDeviceClass = DeviceClass.HIGH,
-            downloadUrl = "$MMS_RELEASE_BASE/vits-mms-$code.tar.bz2",
+            downloadUrl = "$MMS_RELEASE_BASE/vits-mms-$code.tar.gz",
             isArchive = true,
             isMultilingualShared = false,
             supportsLanguage = true,
