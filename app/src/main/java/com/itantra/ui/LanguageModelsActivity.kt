@@ -319,11 +319,11 @@ class LanguageModelsActivity : AppCompatActivity() {
                 progress.text = "Installing ${(f * 100).toInt()}%"
             } },
             onDone = { result -> runOnUiThread {
-                if (result.isSuccess && pack.role == ModelRole.TTS) {
-                    Thread {
-                        try { smm.loadDownloadedVoice(pack.language.code) } catch (_: Throwable) {}
-                    }.start()
-                }
+                // No eager sherpa load here: loading a downloaded voice on a raw
+                // background thread can native-crash the shared TtsEngine while the
+                // main pipeline uses it (process restart, install appears lost).
+                // The voice is loaded lazily when its language is selected on the
+                // home screen dropdown.
                 render()
             } }
         )

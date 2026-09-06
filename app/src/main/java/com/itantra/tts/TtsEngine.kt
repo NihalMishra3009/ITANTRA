@@ -41,6 +41,7 @@ class TtsEngine(
     private var isInitialized = false
     private var hasRealModel = false
 
+    @Synchronized
     override fun initialize(languageCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(languageCode)
         if (isInitialized && tts != null && currentLanguage == lang) {
@@ -99,7 +100,11 @@ class TtsEngine(
     /** Crash-guarded load of a downloaded (file-path) voice pack.
      *  Runs the sherpa load OFF the calling thread and, because a native SIGABRT
      *  cannot be caught, the caller should treat a returned false as a signal to
-     *  keep using the bundled voice. Do not call during app startup. */
+     *  keep using the bundled voice. Do not call during app startup.
+     *  Synchronized so a load (which calls release()) never races an in-flight
+     *  synthesize() on the same native engine — that race caused native SIGABRT
+     *  process restarts. */
+    @Synchronized
     fun loadDownloadedVoice(langCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(langCode)
         val dir = File(context.filesDir, "models/tts/${lang.code}")
