@@ -64,7 +64,16 @@ class MainActivity : AppCompatActivity() {
     private var lastIncomingMessage: String = ""
     private var lastSttMessage: String = ""
 
-    private val prototypeLanguages = listOf(SupportedLanguage.HINDI, SupportedLanguage.ENGLISH)
+    private val prototypeLanguages = SupportedLanguage.values().toList()
+
+    /** Languages shown in the dropdown: only those with BOTH STT and TTS models
+     *  actually available (bundled or installed). Falls back to all languages when
+     *  none qualify yet, so the transceiver stays usable with STT-only. */
+    private fun dropdownLanguages(): List<SupportedLanguage> {
+        val smm = orchestrator.speechModelManager
+        val full = prototypeLanguages.filter { smm.sttAvailable(it.code) && smm.ttsAvailable(it.code) }
+        return if (full.isEmpty()) prototypeLanguages else full
+    }
 
     private val requiredPermissions by lazy {
         val list = mutableListOf(
@@ -113,6 +122,16 @@ class MainActivity : AppCompatActivity() {
         checkAndRequestPermissions()
     }
 
+    /** Refresh the language dropdown after returning from the Models screen —
+     *  a voice installed (or deleted) there must appear/disappear immediately. */
+    override fun onResume() {
+        super.onResume()
+        try {
+            rebuildLanguageDropdown()
+        } catch (_: Exception) { }
+        refreshPeerState()
+    }
+
     private fun initEngines() {
         audioRecorder = AudioRecorder()
         audioPlayer = AudioPlayer()
@@ -147,19 +166,35 @@ class MainActivity : AppCompatActivity() {
     // ---------------- Language dropdown ----------------
 
     private fun setupLanguageDropdown() {
-        val adapter = LanguageAdapter(this, prototypeLanguages)
+        rebuildLanguageDropdown()
+    }
+
+    /** Rebuild the language dropdown from CURRENT model availability. Called at
+     *  startup and again in onResume so a voice installed from the Models screen
+     *  (or deleted) reflects immediately. */
+    private fun rebuildLanguageDropdown() {
+        val langs = dropdownLanguages()
+        if (langs.isEmpty()) return
+        val previous = binding.spinnerLanguage.selectedItem as? SupportedLanguage
+        val adapter = LanguageAdapter(this, langs)
         binding.spinnerLanguage.adapter = adapter
         binding.spinnerLanguage.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val lang = prototypeLanguages[position]
-                if (orchestrator.currentLanguage != lang) orchestrator.currentLanguage = lang
+                val lang = langs[position]
+                if (orchestrator.currentLanguage != lang) {
+                    orchestrator.currentLanguage = lang
+                    // (Re)initialize STT/TTS engines for this language — loads a
+                    // downloaded voice pack when present, native asset otherwise.
+                    orchestrator.speechModelManager.selectLanguage(lang)
+                }
                 adapter.notifyDataSetChanged()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
         }
-        val initial = prototypeLanguages.indexOfFirst { it == orchestrator.currentLanguage }.coerceAtLeast(0)
-        binding.spinnerLanguage.setSelection(initial)
+        val initial = langs.indexOfFirst { it == orchestrator.currentLanguage }
+            .takeIf { it >= 0 } ?: langs.indexOfFirst { it == previous }.takeIf { it >= 0 } ?: 0
+        binding.spinnerLanguage.setSelection(initial, false)
     }
 
     /** Custom language dropdown: shows real STT/TTS availability per language. */
