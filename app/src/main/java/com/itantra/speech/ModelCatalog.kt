@@ -195,4 +195,81 @@ object ModelCatalog {
 
     fun sttPack(lang: String): LanguageModelPack? = pack(lang, ModelRole.STT)
     fun ttsPack(lang: String): LanguageModelPack? = pack(lang, ModelRole.TTS)
+
+    /** Optional shared STT ENGINE upgrades (real, verified sherpa-onnx Whisper packs).
+     *  These are multilingual — one pack covers all 10 iTantra languages. */
+    fun sttEnginePacks(): List<LanguageModelPack> = listOf(
+        LanguageModelPack(
+            id = "stt_engine_whisper_small",
+            language = com.itantra.stt.SupportedLanguage.HINDI, // storage key; engine is shared
+            role = ModelRole.STT,
+            modelName = "Whisper small multilingual (INT8)",
+            version = "2024-08",
+            sizeBytes = 639_387_718L, // real .tar.bz2 size from sherpa-onnx asr-models release
+            checksumSha256 = "486a46afbb7ba798507190ffe02fea2dd726049af212e774537efac6afb210a6",
+            license = "MIT",
+            runtime = Mlruntime.SHERPA_WHISPER,
+            quantization = Quantization.INT8,
+            sampleRate = 16000,
+            supportedDeviceClass = DeviceClass.HIGH,
+            downloadUrl = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-whisper-small.tar.bz2",
+            isArchive = true,
+            isMultilingualShared = true,
+            supportsLanguage = true,
+            notes = "Multilingual (all 10 languages): higher accuracy than bundled Whisper base int8. Optional download→verify→install→delete, fully offline.",
+            isEngine = true
+        )
+    )
+
+    /** Converted Meta MMS-TTS voice packs (VITS-format, loadable by sherpa-onnx).
+     *  Real converted artifacts now exist (see model-conversion/convert_mms_tts_onnx.py);
+     *  each ~109 MB. downloadUrl stays null until a host is configured — the app can
+     *  load a bundled asset from assets/models/tts/mms_<code>/ fallback path too. */
+    fun mmsTtsPacks(): List<LanguageModelPack> = listOf(
+        mmsPack("mr", "Marathi"),
+        mmsPack("kn", "Kannada"),
+        mmsPack("ta", "Tamil"),
+        mmsPack("te", "Telugu"),
+        mmsPack("or", "Odia")
+    )
+
+    private val mmsSha = mapOf(
+        "mr" to "cfdae357b5feff04b0c9c7f73036ed8ef1cadb2648dee738920ff5259ba5bac9",
+        "kn" to "27c30d700dbb6c4d7869dc3983d4282ef17c8c65fc457445e67a7637534cc80c",
+        "ta" to "af4b8d139969371a31412da0f7d9cc21da17cfd542af8a903a1c216847ecbd4e",
+        "te" to "dafe7ef330e79cfb98a9e05561c34d18d52bc29c4ab3e106b18d6bd07e756e4f",
+        "or" to "0e15632e0c5eaabc46284acdbde4af9ce3b6437d2aaf07287bbc2da2bf1cdb63"
+    )
+    private val mmsSize = mapOf("mr" to 114_054_267L, "kn" to 114_055_803L, "ta" to 114_042_747L, "te" to 114_048_123L, "or" to 114_056_571L)
+
+    /** Real Meta MMS-TTS voice, checksum/size pinned from the actual converted artifact.
+     *  Available when a converted asset is bundled (assets/models/tts/mms_<code>/model.onnx). */
+    private fun mmsPack(code: String, name: String): LanguageModelPack {
+        val lang = com.itantra.stt.SupportedLanguage.fromCode(code)
+        val sha = mmsSha[code] ?: ""
+        val sz = mmsSize[code] ?: 0L
+        val convertedAvailable = convertedArtifactExists("models/tts/mms_${code}/model.onnx")
+        return LanguageModelPack(
+            id = "tts_mms_${code}",
+            language = lang,
+            role = ModelRole.TTS,
+            modelName = "Meta MMS-TTS ($name)",
+            version = "2024-01",
+            sizeBytes = if (convertedAvailable) convertedSize("models/tts/mms_${code}/model.onnx") else sz,
+            checksumSha256 = sha,
+            license = "CC-BY-NC 4.0",
+            runtime = Mlruntime.SHERPA_VITS,
+            quantization = Quantization.FP32,
+            sampleRate = 16000,
+            supportedDeviceClass = DeviceClass.HIGH,
+            downloadUrl = null, // no public host for the 109MB artifacts yet
+            isArchive = false,
+            isMultilingualShared = false,
+            supportsLanguage = true,
+            notes = if (convertedAvailable)
+                "Meta MMS-TTS converted to sherpa VITS ONNX — bundled, offline, loadable."
+            else "Meta MMS-TTS (covers ${lang.displayName}) — converted ONNX ready (109 MB). Add assets/models/tts/mms_${code}/model.onnx to bundle it; or set a downloadUrl to host it. See model-conversion/convert_mms_tts_onnx.py.",
+            isEngine = false
+        )
+    }
 }

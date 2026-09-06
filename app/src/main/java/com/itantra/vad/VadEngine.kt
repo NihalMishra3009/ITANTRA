@@ -181,8 +181,8 @@ class VadEngine(
         }
     }
 
-    /** True when this engine is using the real neural VAD model. */
-    fun isUsingNeuralVad(): Boolean = isSileroLoaded
+    /** Energy fallback is always the active detector — Silero v4 model is incompatible. */
+    fun isUsingNeuralVad(): Boolean = false
 
     fun reset() {
         isSpeaking = false

@@ -44,6 +44,12 @@ object LanguageManager {
             listOf("I need assistance", "Send immediate help", "Location is secure", "Medical supplies required"))
     )
 
+    fun isTtsBundled(langCode: String): Boolean {
+        return profiles[langCode.lowercase()]?.let { profile ->
+            profile.ttsAvailable
+        } ?: false
+    }
+
     fun getProfile(langCode: String): IndicLanguageProfile {
         return profiles[langCode.lowercase()] ?: profiles["hi"]!!
     }

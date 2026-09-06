@@ -75,6 +75,10 @@
 
     <!-- Network / models screens -->
     <string name="fatal_error">FATAL ERROR</string>
-    <string name="model_screen_title">OFFLINE LANGUAGE MODELS</string>
+    <string name="model_screen_title">Offline Models</string>
     <string name="model_screen_subtitle">Download only the languages you need.\nInference works without internet.</string>
+    <string name="model_storage">MODEL STORAGE</string>
+    <string name="tab_installed">INSTALLED</string>
+    <string name="tab_available">AVAILABLE</string>
+    <string name="tab_all">ALL</string>
 </resources>

@@ -9,7 +9,6 @@ lifecycleRuntimeKtx = "2.8.4"
 coroutines = "1.8.1"
 gson = "2.10.1"
 compress = "1.26.0"
-onnxruntime = "1.18.0"
 room = "2.6.1"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
@@ -26,7 +25,6 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 gson = { group = "com.google.code.gson", name = "gson", version.ref = "gson" }
 commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "compress" }
-onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
 room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
 room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
 room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }

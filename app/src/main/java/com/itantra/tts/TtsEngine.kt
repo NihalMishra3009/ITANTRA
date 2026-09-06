@@ -64,9 +64,22 @@ class TtsEngine(
 
         // Load the (known-good) bundled asset VITS model if present.
         if (!assetExists(modelPath) || !assetExists(tokensPath)) {
-            Log.w(TAG, "No genuine TTS model for ${lang.displayName} (missing $modelPath) — TTS unavailable")
-            isInitialized = true
-            return true
+            // Fall back to a bundled MMS-TTS voice (VITS-format) for languages with
+            // no Piper/Coqui sherpa voice.
+            val mmsAssetDir = "models/tts/mms_${lang.code}"
+            val mmsPath = "$mmsAssetDir/model.onnx"
+            val mmsTokens = "$mmsAssetDir/tokens.txt"
+            if (!assetExists(mmsPath) || !assetExists(mmsTokens)) {
+                Log.w(TAG, "No genuine TTS model for ${lang.displayName} (missing $modelPath / $mmsPath) — TTS unavailable")
+                isInitialized = true
+                return true
+            }
+            return loadVits(
+                fileModel = mmsPath,
+                fileTokens = mmsTokens,
+                useFilePaths = false,
+                lang = lang
+            )
         }
         return loadVits(
             fileModel = modelPath,
@@ -201,7 +214,7 @@ class TtsEngine(
             Log.e(TAG, "No genuine TTS model for ${lang.displayName} — TTS unavailable", e)
             hasRealModel = false
             tts = null
-            true
+            false
         } finally {
             isInitialized = true
         }

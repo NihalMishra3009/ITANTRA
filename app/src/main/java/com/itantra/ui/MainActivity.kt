@@ -253,6 +253,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun themedDialog(): AlertDialog.Builder = AlertDialog.Builder(this, R.style.Theme_ITantra_Dialog)
+
     // ---------------- PTT + SOS ----------------
 
     @SuppressLint("ClickableViewAccessibility")
@@ -279,7 +281,7 @@ class MainActivity : AppCompatActivity() {
 
         binding.btnInfo.setOnClickListener {
             // Incoming circle (history icon): shows real messages history.
-            AlertDialog.Builder(this)
+            themedDialog()
                 .setTitle(getString(R.string.messages_history))
                 .setMessage(messageHistoryText())
                 .setPositiveButton("OK", null)
@@ -294,7 +296,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         binding.btnAlert.setOnClickListener {
-            AlertDialog.Builder(this)
+            themedDialog()
                 .setTitle(getString(R.string.sos_confirm_title))
                 .setMessage(getString(R.string.sos_confirm_body))
                 .setNegativeButton(getString(R.string.sos_cancel), null)
@@ -327,7 +329,7 @@ class MainActivity : AppCompatActivity() {
                     }
 
                     val names = devices.map { "${it.name} (${it.address})" }.toTypedArray()
-                    AlertDialog.Builder(this)
+                    themedDialog()
                         .setTitle("Select Transceiver Peer")
                         .setItems(names) { _, which ->
                             val selectedDevice = devices[which]

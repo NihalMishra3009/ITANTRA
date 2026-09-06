@@ -46,9 +46,15 @@ class ModelDistributionManager(
         statuses[pack.id]?.let {
             if (it in setOf(PackStatus.DOWNLOADING, PackStatus.VERIFYING, PackStatus.LOADING)) return it
         }
-        return if (storage.isInstalled(pack.role, pack.language.code)) PackStatus.INSTALLED
+        return if (pack.isEngine) {
+            if (engineDir(pack).exists()) PackStatus.INSTALLED else PackStatus.NOT_INSTALLED
+        } else if (storage.isInstalled(pack.role, pack.language.code)) PackStatus.INSTALLED
         else PackStatus.NOT_INSTALLED
     }
+
+    /** Directory for shared engine packs (independent of language). */
+    private fun engineDir(pack: LanguageModelPack): File =
+        File(storage.modelsDir, "stt_engine/${pack.id}")
 
     fun setStatus(packId: String, status: PackStatus) { statuses[packId] = status }
 
@@ -83,7 +89,8 @@ class ModelDistributionManager(
             return
         }
         val lang = pack.language.code.lowercase()
-        val targetDir = storage.roleDir(pack.role, lang).apply { mkdirs() }
+        val targetDir = if (pack.isEngine) engineDir(pack).apply { mkdirs() }
+        else storage.roleDir(pack.role, lang).apply { mkdirs() }
         val tmpDir = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
         val tmpFile = File(tmpDir, "model.part")
 
@@ -124,7 +131,7 @@ class ModelDistributionManager(
                 val finalFile: File
                 if (pack.isArchive) {
                     extractArchiveInto(targetDir, tmpFile, onProgress)
-                    finalFile = File(targetDir, "model.onnx")
+                    finalFile = File(targetDir, "tokens.txt")
                 } else {
                     // Atomic move into place for plain single-file models.
                     val f = File(targetDir, "model.onnx")
@@ -135,7 +142,11 @@ class ModelDistributionManager(
                     }
                     finalFile = f
                 }
-                storage.writeInstalledMetadata(pack.role, lang, pack.version, pack.checksumSha256)
+                if (pack.isEngine) {
+                    writeEngineMetadata(pack, lang, targetDir)
+                } else {
+                    storage.writeInstalledMetadata(pack.role, lang, pack.version, pack.checksumSha256)
+                }
                 tmpDir.deleteRecursively()
 
                 setStatus(pack.id, PackStatus.INSTALLED)
@@ -197,8 +208,10 @@ class ModelDistributionManager(
     }
 
     /**
-     * Extract a .tar.bz2 archive (sherpa-onnx tts voice) into the pack directory.
-     * Writes model.onnx + tokens.txt atomically. Uses Apache Commons Compress.
+     * Extract a .tar.bz2 archive (sherpa-onnx TTS voice OR Whisper pack) into the
+     * pack directory. Preserves EVERY .onnx by its original filename (Whisper packs
+     * ship encoder.onnx + decoder.onnx) plus tokens.txt, and espeak-ng-data for
+     * Piper voices. Writes atomically. Uses Apache Commons Compress.
      */
     private fun extractArchiveInto(targetDir: File, archive: File, onProgress: (Float) -> Unit) {
         val tmpExtract = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
@@ -216,19 +229,16 @@ class ModelDistributionManager(
                 val e = entry ?: continue
                 val path = e.name
                 val base = path.substringAfterLast('/')
-                // Full file entries relative to the pack root.
-                val isOnnx = base.endsWith(".onnx") && !onnxFound && e.isFile
-                val isTokens = base.equals("tokens.txt", ignoreCase = true) && !tokensFound && e.isFile
+                if (e.isDirectory) continue
+                // Keep every .onnx (Whisper: encoder+decoder) + tokens.txt + espeak-ng-data.
+                val isOnnx = base.endsWith(".onnx") && e.isFile
+                val isTokens = base.equals("tokens.txt", ignoreCase = true) && e.isFile
                 val isEspeak = path.contains("espeak-ng-data") && e.isFile
-                val isDataFile = isOnnx || isTokens || isEspeak
-                if (!isDataFile) continue
-                // Write the FULL entry using an explicit read loop (tar.copyTo can
-                // stop early on large entries), then verify the written size.
+                if (!isOnnx && !isTokens && !isEspeak) continue
                 val dest: File = when {
-                    isOnnx -> File(tmpExtract, "model.onnx")
+                    isOnnx -> File(tmpExtract, base)
                     isTokens -> File(tmpExtract, "tokens.txt")
                     else -> {
-                        // espeak-ng-data required for Piper; place under tmpExtract/espeak-ng-data.
                         val idx = path.indexOf("espeak-ng-data")
                         val sub = if (idx >= 0) path.substring(idx) else base
                         File(tmpExtract, sub)
@@ -245,7 +255,7 @@ class ModelDistributionManager(
                 }
                 if (isOnnx) {
                     if (e.size > 0 && written < e.size) {
-                        throw IOException("Truncated model.onnx ($written/${e.size} bytes)")
+                        throw IOException("Truncated $base ($written/${e.size} bytes)")
                     }
                     onnxFound = true
                 } else if (isTokens) {
@@ -255,22 +265,20 @@ class ModelDistributionManager(
                 }
             }
             if (!onnxFound || !tokensFound) {
-                throw IOException("Archive missing model.onnx/tokens.txt for ${archive.name}")
+                throw IOException("Archive missing model(*.onnx)/tokens.txt for ${archive.name}")
             }
-            // espeak-ng-data is REQUIRED for Piper voices (dataDir); record its presence.
             writeEspeakMarker(targetDir, espeakFound)
             onProgress(0.95f)
         } finally {
             tar.close()
         }
-        // Atomically publish extracted files into the live dir (copy is robust on all
-        // Android versions; rename can silently fail cross-device).
-        val liveModel = File(targetDir, "model.onnx")
-        val liveTokens = File(targetDir, "tokens.txt")
-        File(tmpExtract, "model.onnx").copyTo(liveModel, overwrite = true)
-        File(tmpExtract, "tokens.txt").copyTo(liveTokens, overwrite = true)
-        File(tmpExtract, "model.onnx").delete()
+        // Atomically publish every extracted file into the live pack dir.
+        File(tmpExtract, "tokens.txt").copyTo(File(targetDir, "tokens.txt"), overwrite = true)
         File(tmpExtract, "tokens.txt").delete()
+        tmpExtract.listFiles { f -> f.isFile && f.name.endsWith(".onnx") }?.forEach { onnx ->
+            onnx.copyTo(File(targetDir, onnx.name), overwrite = true)
+            onnx.delete()
+        }
         // espeak-ng-data is REQUIRED by Piper voices (dataDir) — move it recursively.
         val espeakSrc = File(tmpExtract, "espeak-ng-data")
         if (espeakSrc.exists()) {
@@ -292,12 +300,20 @@ class ModelDistributionManager(
         } catch (e: Exception) { /* non-fatal */ }
     }
 
+    /** Record version + checksum for a shared engine pack. */
+    private fun writeEngineMetadata(pack: LanguageModelPack, lang: String, dir: File) {
+        dir.mkdirs()
+        File(dir, ModelStorageManager.VERSION_FILE).writeText(pack.version)
+        File(dir, ModelStorageManager.CHECKSUM_FILE).writeText(pack.checksumSha256)
+    }
+
     /** Cancel an in-progress download. */
     fun cancel(packId: String) { cancelFlags[packId] = true }
 
-    /** Delete an installed pack (STT and TTS independent). */
+    /** Delete an installed pack (STT and TTS independent, engine packs too). */
     fun deletePack(pack: LanguageModelPack): Boolean {
-        val ok = storage.deletePack(pack.role, pack.language.code)
+        val ok = if (pack.isEngine) engineDir(pack).deleteRecursively()
+        else storage.deletePack(pack.role, pack.language.code)
         statuses.remove(pack.id)
         return ok
     }

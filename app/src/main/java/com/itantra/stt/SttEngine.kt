@@ -113,24 +113,65 @@ class SttEngine(
 
     override fun isModelLoaded(): Boolean = hasRealModel
 
+    /** Force a rebuild from the current best source (downloaded engine if installed). */
+    fun reload(languageCode: String) {
+        release()
+        initialize(languageCode)
+    }
+
     /** Extract model assets once and build the recognizer. Returns true on success. */
     private fun extractModelsAndBuildRecognizer(lang: SupportedLanguage) {
         try {
-            val encoder = copyAssetToFile(context, ENCODER_ASSET, "whisper_base_encoder.onnx")
-            val decoder = copyAssetToFile(context, DECODER_ASSET, "whisper_base_decoder.onnx")
-            val tokens = copyAssetToFile(context, TOKENS_ASSET, "whisper_base_tokens.txt")
-
-            if (encoder == null || decoder == null || tokens == null ||
-                encoder.length() < MIN_MODEL_SIZE_BYTES || decoder.length() < MIN_MODEL_SIZE_BYTES
-            ) {
+            // Prefer an installed downloaded STT ENGINE pack (Whisper small); else bundled base.
+            val files = downloadedWhisperFiles() ?: bundledWhisperFiles()
+            if (files == null) {
                 Log.e(TAG, "Whisper models missing or invalid for ${lang.displayName}")
                 isInitialized = true
                 return
             }
+            if (files.first.length() < MIN_MODEL_SIZE_BYTES || files.second.length() < MIN_MODEL_SIZE_BYTES) {
+                Log.e(TAG, "Whisper models invalid (too small) for ${lang.displayName}")
+                isInitialized = true
+                return
+            }
 
+            buildRecognizer(lang, files.first.absolutePath, files.second.absolutePath, files.third.absolutePath)
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to initialize Whisper STT", e)
+            hasRealModel = false
+            recognizer = null
+        } finally {
+            isInitialized = true
+        }
+    }
+
+    /** Downloaded shared STT engine files (encoder, decoder, tokens) or null. */
+    private fun downloadedWhisperFiles(): Triple<File, File, File>? {
+        val engineDir = File(context.filesDir, "models/stt_engine/stt_engine_whisper_small")
+        val tokens = File(engineDir, "tokens.txt")
+        if (!tokens.exists()) return null
+        val onnx = engineDir.listFiles { f -> f.isFile && f.name.endsWith(".onnx") }?.toList() ?: return null
+        val encoder = onnx.filter { it.name.contains("encoder", ignoreCase = true) }
+            .minByOrNull { if (it.name.contains("int8", ignoreCase = true)) 0 else 1 } ?: return null
+        val decoder = onnx.filter { it.name.contains("decoder", ignoreCase = true) }
+            .minByOrNull { if (it.name.contains("int8", ignoreCase = true)) 0 else 1 } ?: return null
+        return Triple(encoder, decoder, tokens)
+    }
+
+    /** Bundled Whisper base int8 files (copied to filesDir once). */
+    private fun bundledWhisperFiles(): Triple<File, File, File>? {
+        val encoder = copyAssetToFile(context, ENCODER_ASSET, "whisper_base_encoder.onnx")
+        val decoder = copyAssetToFile(context, DECODER_ASSET, "whisper_base_decoder.onnx")
+        val tokens = copyAssetToFile(context, TOKENS_ASSET, "whisper_base_tokens.txt")
+        if (encoder == null || decoder == null || tokens == null) return null
+        return Triple(encoder, decoder, tokens)
+    }
+
+    private fun buildRecognizer(lang: SupportedLanguage, encoderPath: String, decoderPath: String, tokensPath: String) {
+        try {
             val whisperConfig = OfflineWhisperModelConfig(
-                encoder = encoder.absolutePath,
-                decoder = decoder.absolutePath,
+                encoder = encoderPath,
+                decoder = decoderPath,
                 language = lang.code,
                 task = "transcribe",
                 tailPaddings = -1,
@@ -163,7 +204,7 @@ class SttEngine(
                 debug = false,
                 provider = "cpu",
                 modelType = "",
-                tokens = tokens.absolutePath,
+                tokens = tokensPath,
                 modelingUnit = "",
                 bpeVocab = ""
             )
@@ -183,14 +224,16 @@ class SttEngine(
 
             recognizer = OfflineRecognizer(assetManager = null, config = config)
             hasRealModel = true
-            modelManager.markLoaded(ModelType.STT, lang.code, encoder.length() + decoder.length())
-            Log.i(TAG, "Whisper multilingual STT ready for ${lang.displayName} (all 10 languages)")
+            val engineSuffix = if (File(encoderPath).parentFile.name.startsWith("stt_engine")) " (downloaded engine)" else ""
+            modelManager.markLoaded(
+                ModelType.STT, lang.code,
+                File(encoderPath).length() + File(decoderPath).length()
+            )
+            Log.i(TAG, "Whisper multilingual STT ready for ${lang.displayName}$engineSuffix (all 10 languages)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to initialize Whisper STT", e)
             hasRealModel = false
             recognizer = null
-        } finally {
-            isInitialized = true
         }
     }
 

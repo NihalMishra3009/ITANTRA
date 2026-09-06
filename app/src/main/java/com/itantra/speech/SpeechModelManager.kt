@@ -83,6 +83,19 @@ class SpeechModelManager(
     /** Report whether a language's TTS is genuinely available (asset present). */
     fun ttsAvailable(langCode: String): Boolean = registry.isAvailable(langCode, ModelRole.TTS)
 
+    /** Shared engine packs (e.g. downloadable Whisper STT upgrades). */
+    fun enginePacks(): List<LanguageModelPack> = ModelCatalog.sttEnginePacks()
+
+    /** Meta MMS-TTS converted voice packs (covers languages with no Piper/Coqui voice). */
+    fun mmsTtsPacks(): List<LanguageModelPack> = ModelCatalog.mmsTtsPacks()
+
+    /** Rebuild the STT recognizer from its current best source (downloaded engine or bundled). */
+    fun reloadStt() {
+        val lang = currentLanguage.code
+        Log.i(TAG, "Reloading STT engine for $lang")
+        sttEngine?.reload(lang)
+    }
+
     /** Switch active language — lazy-loads only this language's models. */
     fun selectLanguage(lang: SupportedLanguage) {
         if (currentLanguage == lang) return

@@ -111,7 +111,7 @@
                         android:layout_marginStart="10dp"
                         android:layout_weight="1"
                         android:gravity="end"
-                        android:fontFamily="monospace"
+                        android:fontFamily="@font/digital7"
                         android:text="ITN-UNKNOWN"
                         android:textColor="@color/comm_green"
                         android:textSize="14sp"
@@ -256,11 +256,11 @@
                 </FrameLayout>
             </FrameLayout>
 
-            <!-- Bottom buttons row — below radar, above READY (own layer) -->
+            <!-- READY + circular actions row: info | READY | SOS -->
             <LinearLayout
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
+                android:layout_marginTop="-10dp"
                 android:gravity="center_vertical"
                 android:orientation="horizontal">
 
@@ -284,10 +284,18 @@
                         app:tint="@color/comm_green" />
                 </FrameLayout>
 
-                <View
+                <TextView
+                    android:id="@+id/tvStatusText"
                     android:layout_width="0dp"
-                    android:layout_height="1dp"
-                    android:layout_weight="1" />
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:gravity="center"
+                    android:letterSpacing="0.18"
+                    android:text="@string/standby_ready"
+                    android:textAllCaps="true"
+                    android:textColor="@color/text_white"
+                    android:textSize="22sp"
+                    android:textStyle="bold" />
 
                 <FrameLayout
                     android:id="@+id/btnAlert"
@@ -309,20 +317,6 @@
                         app:tint="@color/comm_red" />
                 </FrameLayout>
             </LinearLayout>
-
-            <!-- Pipeline state / status (plain text) -->
-            <TextView
-                android:id="@+id/tvStatusText"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="2dp"
-                android:gravity="center"
-                android:letterSpacing="0.18"
-                android:text="@string/standby_ready"
-                android:textAllCaps="true"
-                android:textColor="@color/text_white"
-                android:textSize="22sp"
-                android:textStyle="bold" />
 
             <!-- Incoming message details (second card; shown by bottom-left info button) -->
             <TextView
@@ -361,12 +355,13 @@
                     android:textColor="@color/text_faint"
                     android:textSize="10sp" />
 
-                <TextView
+<TextView
                     android:id="@+id/tvPerfSummary"
                     android:layout_width="0dp"
                     android:layout_height="wrap_content"
                     android:layout_marginStart="12dp"
                     android:layout_weight="1"
+                    android:fontFamily="@font/digital7"
                     android:gravity="end"
                     android:text="@string/latency_placeholder"
                     android:textColor="@color/text_white"
@@ -374,12 +369,13 @@
                     android:textStyle="bold" />
             </LinearLayout>
 
-            <TextView
+<TextView
                 android:id="@+id/tvLatencyMetrics"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="6dp"
                 android:background="@drawable/bg_surface_chip"
+                android:fontFamily="@font/digital7"
                 android:padding="12dp"
                 android:text="@string/latency_placeholder"
                 android:textColor="@color/text_muted"
@@ -409,12 +405,13 @@
                 android:textSize="16sp" />
 
             <!-- ================= NETWORK MINI STATS ================= -->
-            <TextView
+<TextView
                 android:id="@+id/tvNetworkStats"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="10dp"
                 android:background="@drawable/bg_surface_chip"
+                android:fontFamily="@font/digital7"
                 android:padding="10dp"
                 android:textColor="@color/text_muted"
                 android:textSize="11sp" />

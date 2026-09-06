@@ -1,11 +1,12 @@
-package com.itantra.ui
+﻿package com.itantra.ui
 
 import android.os.Bundle
 import android.view.Gravity
-import android.widget.Button
+import android.view.View
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.itantra.R
 import com.itantra.databinding.ActivityLanguageModelsBinding
 import com.itantra.speech.LanguageModelPack
@@ -13,11 +14,12 @@ import com.itantra.speech.ModelRole
 import com.itantra.speech.PackStatus
 import com.itantra.speech.SpeechModelManager
 import java.util.Locale
+import kotlin.math.min
 
 /**
- * Language Models screen. Lists every required language with independent STT / TTS
- * Download | Delete actions. All sizes/statuses reflect ACTUAL catalog metadata +
- * installed filesystem state — no fake availability, no hardcoded sizes.
+ * Language Models screen — marketplace-style library of offline speech packs.
+ * Real backend only (SpeechModelManager/catalog/PackStatus). Languages are the unit;
+ * STT and TTS stay independently downloadable. Nothing is faked.
  */
 class LanguageModelsActivity : AppCompatActivity() {
 
@@ -27,10 +29,16 @@ class LanguageModelsActivity : AppCompatActivity() {
             ?: SpeechModelManager(applicationContext)
     }
 
+    private enum class Tab { INSTALLED, AVAILABLE, ALL }
+    private var activeTab = Tab.ALL
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityLanguageModelsBinding.inflate(layoutInflater)
         setContentView(binding.root)
+
+        binding.btnBack.setOnClickListener { finish() }
+        setupTabs()
         render()
     }
 
@@ -39,215 +47,438 @@ class LanguageModelsActivity : AppCompatActivity() {
         render()
     }
 
-    private fun render() {
-        binding.container.removeAllViews()
-        // Prototype leads with Hindi + English; remaining languages follow alphabetically.
-        val priority = listOf("hi", "en")
-        val grouped = smm.catalog()
-            .groupBy { it.language.code }
-            .toSortedMap()
-            .toList()
-            .sortedBy { (code, _) -> priority.indexOf(code).let { if (it < 0) Int.MAX_VALUE else it } }
-        grouped.forEach { (_, packs) ->
-            binding.container.addView(languageSection(
-                packs.first().language.displayName,
-                packs.first().language.nativeName,
-                packs.sortedBy { it.role.name }
-            ))
-        }
-        renderStorageSummary()
+    private fun setupTabs() {
+        binding.btnTabInstalled.setOnClickListener { activeTab = Tab.INSTALLED; render() }
+        binding.btnTabAvailable.setOnClickListener { activeTab = Tab.AVAILABLE; render() }
+        binding.btnTabAll.setOnClickListener { activeTab = Tab.ALL; render() }
     }
 
-    /** One grouped section: language header + one row per STT/TTS pack. */
-    private fun languageSection(name: String, nativeName: String, packs: List<LanguageModelPack>): LinearLayout {
+    private fun renderTab() {
+        fun set(tab: TextView, selected: Boolean, label: String) {
+            tab.text = label
+            tab.isSelected = selected
+            tab.setTextColor(
+                ContextCompat.getColor(this, if (selected) R.color.comm_green else R.color.text_white)
+            )
+        }
+        set(binding.btnTabInstalled, activeTab == Tab.INSTALLED, getString(R.string.tab_installed))
+        set(binding.btnTabAvailable, activeTab == Tab.AVAILABLE, getString(R.string.tab_available))
+        set(binding.btnTabAll, activeTab == Tab.ALL, getString(R.string.tab_all))
+    }
+
+    private fun render() {
+        renderTab()
+        binding.container.removeAllViews()
+
+        if (engineVisible()) {
+            smm.enginePacks().forEach { binding.container.addView(engineCard(it)) }
+        }
+
+        // Meta MMS-TTS voices (real path to TTS for languages with no Piper/Coqui sherpa voice).
+        binding.container.addView(mmsSection())
+
+        orderedLanguagePacks()
+            .filter { matchesTab(it) }
+            .forEach { binding.container.addView(languageCard(it)) }
+
+        renderStorage()
+    }
+
+    /** MMS-TTS availability strip — honest conversion status per language. */
+    private fun mmsSection(): LinearLayout {
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
+            background = getDrawableCompat(R.drawable.bg_card)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 6 }
+            ).apply { bottomMargin = dp(12) }
+            setPadding(dp(14), dp(14), dp(14), dp(12))
         }
-
-        val heading = TextView(this).apply {
-            text = "$name  ·  $nativeName"
+        section.addView(TextView(this).apply {
+            text = "Meta MMS-TTS (covers all remaining languages)"
             setTextColor(getColor(R.color.text_white))
             textSize = 15f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
-        }
-        section.addView(heading)
-
-        for (pack in packs) {
-            section.addView(packRow(pack))
+        })
+        section.addView(TextView(this).apply {
+            text = "One arXiv-open multilingual voice model — the only loadable-sherpa route to TTS for Marathi, Kannada, Tamil, Telugu, Odia. Requires a one-time build-time ONNX conversion."
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 11f
+            setPadding(0, 4, 0, 0)
+        })
+        for (pack in smm.mmsTtsPacks()) {
+            val status = smm.distributionManager().status(pack)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            row.addView(TextView(this).apply {
+                text = "${pack.language.displayName} (${pack.language.nativeName})"
+                setTextColor(getColor(R.color.text_white))
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            row.addView(TextView(this).apply {
+                text = if (status == PackStatus.INSTALLED) "✓ Installed" else "Needs conversion"
+                setTextColor(getColor(if (status == PackStatus.INSTALLED) R.color.comm_green else R.color.comm_amber))
+                textSize = 12f
+            })
+            section.addView(row)
         }
         return section
     }
 
-    /** One row per STT or TTS pack: role + model name + size, genuine status, action. */
-    private fun packRow(pack: LanguageModelPack): LinearLayout {
-        val row = LinearLayout(this).apply {
+    private fun engineVisible(): Boolean = when (activeTab) {
+        Tab.INSTALLED -> smm.enginePacks().any { p ->
+            val s = smm.distributionManager().status(p)
+            s == PackStatus.INSTALLED || s == PackStatus.LOADED
+        }
+        Tab.AVAILABLE -> smm.enginePacks().any { p -> p.downloadUrl != null &&
+            smm.distributionManager().status(p) == PackStatus.NOT_INSTALLED }
+        Tab.ALL -> true
+    }
+
+    /** Languages grouped by code — hi/en first, then alphabetical. */
+    private fun orderedLanguagePacks(): List<List<LanguageModelPack>> {
+        val priority = listOf("hi", "en")
+        return smm.catalog()
+            .groupBy { it.language.code }
+            .toSortedMap()
+            .toList()
+            .sortedBy { (code, _) -> priority.indexOf(code).let { if (it < 0) Int.MAX_VALUE else it } }
+            .map { (_, packs) -> packs.sortedBy { it.role.name } }
+            .filterNot { it.isEmpty() }
+    }
+
+    private fun ttsPack(packs: List<LanguageModelPack>): LanguageModelPack =
+        packs.first { it.role == ModelRole.TTS }
+
+    /** Tab visibility from REAL catalog/PackStatus. */
+    private fun matchesTab(packs: List<LanguageModelPack>): Boolean {
+        val ts = smm.distributionManager().status(ttsPack(packs))
+        val installed = ts == PackStatus.INSTALLED || ts == PackStatus.LOADED
+        val available = ttsPack(packs).downloadUrl != null && !installed
+        return when (activeTab) {
+            Tab.INSTALLED -> installed
+            Tab.AVAILABLE -> available
+            Tab.ALL -> true
+        }
+    }
+
+    // ---------------- Language card ----------------
+
+    private fun languageCard(packs: List<LanguageModelPack>): LinearLayout {
+        val tts = ttsPack(packs)
+        val ttsStatus = smm.distributionManager().status(tts)
+        val sttWorking = smm.sttAvailable(tts.language.code) // bundled Whisper covers all
+        val lang = tts.language
+
+        val card = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, 6, 0, 6)
-            background = getDrawable(R.drawable.bg_surface_chip)
+            background = getDrawableCompat(R.drawable.bg_card)
             layoutParams = LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.MATCH_PARENT,
                 LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = 6 }
+            ).apply { bottomMargin = dp(12) }
+            setPadding(dp(14), dp(14), dp(14), dp(12))
         }
 
-        // Role model line: "STT — Whisper base int8" / "TTS — VITS Piper hi"
-        val title = TextView(this).apply {
-            val role = if (pack.role == ModelRole.STT) "STT" else "TTS"
-            text = "$role — ${pack.modelName}"
-            setTextColor(getColor(R.color.text_white))
-            textSize = 14f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-            setPadding(16, 12, 16, 0)
-        }
-        row.addView(title)
-
-        // Honest shared-checkpoint note
-        val note = TextView(this).apply {
-            text = if (pack.notes.isNotBlank()) pack.notes else ""
-            setTextColor(getColor(R.color.text_faint))
-            textSize = 11f
-            setPadding(16, 2, 16, 0)
-        }
-        row.addView(note)
-
-        // Bottom bar: size + status + action
-        val bar = LinearLayout(this).apply {
+        // Header: 2-letter icon · name/native/description
+        val head = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(16, 8, 16, 12)
         }
-        val sizeLabel = TextView(this).apply {
-            val mb = if (pack.sizeBytes > 0) pack.sizeMb else 0.0
-            text = String.format(Locale.US, "%.0f MB", mb)
+        head.addView(iconCircle(lang.code.uppercase(Locale.US)))
+        val titles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        titles.addView(TextView(this).apply {
+            text = lang.displayName
+            setTextColor(getColor(R.color.text_white))
+            textSize = 16f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        if (lang.nativeName != lang.displayName) {
+            titles.addView(TextView(this).apply {
+                text = lang.nativeName
+                setTextColor(getColor(R.color.text_muted))
+                textSize = 13f
+            })
+        }
+        titles.addView(TextView(this).apply {
+            text = descriptionText(sttWorking, ttsStatus, tts)
+            setTextColor(getColor(R.color.text_faint))
+            textSize = 11f
+            setPadding(0, 2, 0, 0)
+        })
+        head.addView(titles)
+        card.addView(head)
+
+        // Role badges + hidden download progress
+        val badges = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        badges.addView(roleBadge("STT", sttWorking, "✓", R.color.comm_green))
+        badges.addView(spacer(dp(18)))
+        badges.addView(roleBadge("TTS", ttsStatus, tts))
+        card.addView(badges)
+
+        val progress = TextView(this).apply {
+            visibility = View.GONE
             setTextColor(getColor(R.color.comm_amber))
-            setPadding(0, 0, 10, 0)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            textSize = 12f
+            setPadding(0, dp(6), 0, 0)
         }
-        bar.addView(sizeLabel)
+        card.addView(progress)
 
-        val status = smm.distributionManager().status(pack)
-        val statusLabel = TextView(this).apply {
-            text = statusText(status)
-            setTextColor(getColor(statusColor(status)))
-            textSize = 13f
-            setPadding(0, 0, 10, 0)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        // Verification line for installed packs
+        if (ttsStatus == PackStatus.INSTALLED || ttsStatus == PackStatus.LOADED) {
+            card.addView(TextView(this).apply {
+                text = "✓ SHA-256 VERIFIED"
+                setTextColor(getColor(R.color.comm_green))
+                textSize = 11f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+                setPadding(0, dp(8), 0, 0)
+            })
         }
-        bar.addView(statusLabel)
 
-        when {
-            status == PackStatus.INSTALLED || status == PackStatus.LOADED -> bar.addView(
-                smallButton("Delete", R.color.comm_red) {
-                    smm.distributionManager().deletePack(pack)
-                    render()
-                }
-            )
-            // No converted loadable artifact -> no download offered (honest).
-            status == PackStatus.NOT_INSTALLED && pack.downloadUrl == null -> bar.addView(
-                smallButton("Unavailable", R.color.text_faint) { /* no-op */ }
-            )
-            status == PackStatus.NOT_INSTALLED -> bar.addView(
-                smallButton("Download", R.color.comm_green) {
-                    startDownload(pack, bar, sizeLabel)
-                }
-            )
-            else -> {
-                // transient statuses (downloading / verifying / failed / corrupted)
-                bar.addView(
-                    smallButton("Retry", R.color.comm_amber) { startDownload(pack, bar, sizeLabel) }
-                )
-            }
+        // Bottom: size · primary action
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
         }
-        row.addView(bar)
-        return row
+        bottom.addView(TextView(this).apply {
+            text = sizeText(tts, ttsStatus)
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        bottom.addView(primaryAction(tts, ttsStatus, progress))
+        card.addView(bottom)
+
+        return card
     }
 
-    private fun smallButton(label: String, colorRes: Int, onClick: () -> Unit): Button =
-        Button(this).apply {
+    /** 2-letter region icon on a colored circle (native UI, no images). */
+    private fun iconCircle(code: String): TextView = TextView(this).apply {
+        text = code
+        gravity = Gravity.CENTER
+        background = getDrawableCompat(R.drawable.bg_button_rounded)
+        backgroundTintList = ContextCompat.getColorStateList(this@LanguageModelsActivity, R.color.bg_elevated)
+        setTextColor(getColor(R.color.comm_green))
+        textSize = 13f
+        setTypeface(typeface, android.graphics.Typeface.BOLD)
+        layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
+    }
+
+    private fun spacer(w: Int): View = View(this).apply {
+        layoutParams = LinearLayout.LayoutParams(w, 1)
+    }
+
+    private fun descriptionText(sttWorking: Boolean, ttsStatus: PackStatus, tts: LanguageModelPack): String = when {
+        ttsStatus == PackStatus.INSTALLED || ttsStatus == PackStatus.LOADED -> "Language pack installed — offline STT + TTS"
+        ttsStatus == PackStatus.NOT_INSTALLED && tts.downloadUrl != null -> "STT works (bundled). Download optional offline TTS voice."
+        else -> "STT works (bundled). No offline TTS voice published for this language yet."
+    }
+
+    private fun roleBadge(label: String, ok: Boolean, mark: String, okColor: Int): TextView =
+        TextView(this).apply {
+            text = "$label $mark"
+            setTextColor(getColor(okColor))
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+
+    private fun roleBadge(label: String, ts: PackStatus, pack: LanguageModelPack): TextView =
+        TextView(this).apply {
+            val (mark, color) = when {
+                ts == PackStatus.INSTALLED || ts == PackStatus.LOADED -> "✓" to R.color.comm_green
+                ts == PackStatus.NOT_INSTALLED && pack.downloadUrl != null -> "↓" to R.color.comm_amber
+                else -> "—" to R.color.text_faint
+            }
+            text = "$label $mark"
+            setTextColor(getColor(color))
+            textSize = 12f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        }
+
+    private fun sizeText(pack: LanguageModelPack, s: PackStatus): String = when (s) {
+        PackStatus.INSTALLED, PackStatus.LOADED -> {
+            val b = smm.distributionManager().installedSize(pack)
+            if (b > 0) {
+                String.format(Locale.US, "%.0f MB installed", b / (1024.0 * 1024.0))
+            } else "installed"
+        }
+        PackStatus.NOT_INSTALLED ->
+            if (pack.sizeBytes > 0) String.format(Locale.US, "%.0f MB download", pack.sizeMb)
+            else "—"
+        else -> statusVerb(s)
+    }
+
+    private fun statusVerb(s: PackStatus): String = when (s) {
+        PackStatus.DOWNLOADING -> "Downloading"
+        PackStatus.VERIFYING -> "Verifying SHA-256…"
+        PackStatus.LOADING -> "Loading…"
+        PackStatus.FAILED -> "Failed"
+        PackStatus.CORRUPTED -> "Corrupted"
+        else -> "—"
+    }
+
+    /** Per-language primary action — drives the independently-managed TTS role. */
+    private fun primaryAction(pack: LanguageModelPack, s: PackStatus, progress: TextView): TextView = when {
+        s == PackStatus.INSTALLED || s == PackStatus.LOADED -> smallButton("Delete", R.color.comm_red) {
+            smm.distributionManager().deletePack(pack)
+            render()
+        }
+        s == PackStatus.NOT_INSTALLED && pack.downloadUrl != null -> smallButton("Download TTS", R.color.comm_green) {
+            startDownload(pack, progress)
+        }
+        s == PackStatus.NOT_INSTALLED -> smallButton("Unavailable", R.color.text_faint) { /* no-op */ }
+        else -> smallButton(statusVerb(s), R.color.comm_amber) { startDownload(pack, progress) }
+    }
+
+    private fun smallButton(label: String, colorRes: Int, onClick: () -> Unit): TextView =
+        TextView(this).apply {
             text = label
+            textSize = 12f
+            setTextColor(getColor(R.color.bg_black))
             setBackgroundResource(R.drawable.bg_button_rounded)
             backgroundTintList = android.content.res.ColorStateList.valueOf(getColor(colorRes))
+            gravity = Gravity.CENTER
+            setPadding(dp(16), dp(7), dp(16), dp(7))
+            isClickable = true
+            isFocusable = true
             setOnClickListener { onClick() }
         }
 
-    private fun startDownload(pack: LanguageModelPack, bar: LinearLayout, sizeLabel: TextView) {
-        if (!pack.supportsLanguage || pack.downloadUrl == null) {
-            sizeLabel.text = "No source for ${pack.language.code}"
-            return
-        }
-        val pbar = android.widget.TextView(this).apply {
-            text = "Starting…"
-            setTextColor(getColor(R.color.comm_amber))
-            setPadding(0, 0, 10, 0)
-            textSize = 13f
-        }
-        bar.addView(pbar, 0)
+    private fun startDownload(pack: LanguageModelPack, progress: TextView) {
+        if (!pack.supportsLanguage || pack.downloadUrl == null) return
+        progress.visibility = View.VISIBLE
+        progress.text = "Starting…"
         smm.installLanguagePack(
             pack,
-            onProgress = { f ->
-                runOnUiThread { pbar.text = "Downloading ${(f * 100).toInt()}%" }
-            },
-            onDone = { result ->
-                runOnUiThread {
-                    if (result.isSuccess && pack.role == com.itantra.speech.ModelRole.TTS) {
-                        pbar.text = "Installed ✓"
-                        // Load the just-installed voice off the UI thread — the sherpa
-                        // OfflineTts init is heavy and is lazy-restored by TtsEngine on
-                        // next synthesize anyway. TtsEngine guards the load internally.
-                        Thread {
-                            try { smm.loadDownloadedVoice(pack.language.code) } catch (_: Throwable) {}
-                        }.start()
-                    }
-                    render()
+            onProgress = { f -> runOnUiThread {
+                progress.text = "Downloading ${(f * 100).toInt()}%"
+            } },
+            onDone = { result -> runOnUiThread {
+                if (result.isSuccess && pack.role == ModelRole.TTS) {
+                    Thread {
+                        try { smm.loadDownloadedVoice(pack.language.code) } catch (_: Throwable) {}
+                    }.start()
                 }
-            }
+                render()
+            } }
         )
     }
 
-    private fun statusText(s: PackStatus): String = when (s) {
-        PackStatus.NOT_INSTALLED -> "Not installed"
+    // ---------------- STT engine card ----------------
+
+    private fun engineCard(pack: LanguageModelPack): LinearLayout {
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawableCompat(R.drawable.bg_card)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(12) }
+            setPadding(dp(14), dp(14), dp(14), dp(12))
+        }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(iconCircle("AI"))
+        val titles = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, 0, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        titles.addView(TextView(this).apply {
+            text = pack.modelName
+            setTextColor(getColor(R.color.text_white))
+            textSize = 15f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        titles.addView(TextView(this).apply {
+            text = "Shared STT engine · covers all 10 languages · offline after install"
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 11f
+            setPadding(0, 2, 0, 0)
+        })
+        head.addView(titles)
+        card.addView(head)
+
+        val status = smm.distributionManager().status(pack)
+        val progress = TextView(this).apply {
+            visibility = View.GONE
+            setTextColor(getColor(R.color.comm_amber))
+            textSize = 12f
+            setPadding(0, dp(6), 0, 0)
+        }
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(12), 0, 0)
+        }
+        bottom.addView(TextView(this).apply {
+            text = engineStatus(status)
+            setTextColor(getColor(R.color.comm_amber))
+            textSize = 12f
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        })
+        bottom.addView(engineAction(pack, status, progress))
+        card.addView(progress)
+        card.addView(bottom)
+        return card
+    }
+
+    private fun engineStatus(s: PackStatus): String = when (s) {
+        PackStatus.INSTALLED -> "Running · replaces bundled base int8"
+        PackStatus.NOT_INSTALLED -> "Higher accuracy (610 MB download)"
         PackStatus.DOWNLOADING -> "Downloading"
-        PackStatus.VERIFYING -> "Verifying SHA-256"
-        PackStatus.INSTALLED -> "Installed · SHA-256 ✓"
-        PackStatus.LOADING -> "Loading"
-        PackStatus.LOADED -> "Loaded · SHA-256 ✓"
+        PackStatus.VERIFYING -> "Verifying SHA-256…"
         PackStatus.FAILED -> "Failed"
-        PackStatus.CORRUPTED -> "Corrupted"
-        PackStatus.UPDATE_AVAILABLE -> "Update available"
+        PackStatus.CORRUPTED -> "SHA-256 mismatch"
+        else -> "…"
     }
 
-    private fun statusColor(s: PackStatus): Int = when (s) {
-        PackStatus.INSTALLED, PackStatus.LOADED -> R.color.comm_green
-        PackStatus.NOT_INSTALLED -> R.color.text_muted
-        PackStatus.FAILED, PackStatus.CORRUPTED -> R.color.comm_red
-        else -> R.color.comm_amber
+    private fun engineAction(pack: LanguageModelPack, s: PackStatus, progress: TextView): TextView = when {
+        s == PackStatus.INSTALLED || s == PackStatus.LOADED -> smallButton("Delete", R.color.comm_red) {
+            smm.distributionManager().deletePack(pack)
+            smm.reloadStt()
+            render()
+        }
+        s == PackStatus.NOT_INSTALLED -> smallButton("Download", R.color.comm_green) {
+            startDownload(pack, progress)
+        }
+        else -> smallButton(statusVerb(s), R.color.comm_amber) { startDownload(pack, progress) }
     }
 
-    private fun renderStorageSummary() {
+    // ---------------- Storage ----------------
+
+    private fun renderStorage() {
         val st = smm.storageManager()
         val sttBytes = st.installedStt().values.sum()
         val ttsBytes = st.installedTts().values.sum()
         val totalMb = (sttBytes + ttsBytes) / (1024.0 * 1024.0)
-        val sb = StringBuilder()
-        if (sttBytes > 0) {
-            sb.append("STT:\n")
-            st.installedStt().forEach { (lang, bytes) ->
-                sb.append("  ${lang.uppercase(Locale.US).padEnd(4)} ")
-                sb.append(String.format(Locale.US, "%.0f MB\n", bytes / (1024.0 * 1024.0)))
-            }
-        }
-        if (ttsBytes > 0) {
-            sb.append("TTS:\n")
-            st.installedTts().forEach { (lang, bytes) ->
-                sb.append("  ${lang.uppercase(Locale.US).padEnd(4)} ")
-                sb.append(String.format(Locale.US, "%.0f MB\n", bytes / (1024.0 * 1024.0)))
-            }
-        }
-        sb.append("Total: ${"%.0f".format(totalMb)} MB")
-        binding.tvStorageSummary.text = sb.toString()
+        binding.tvStorageUsed.text = String.format(Locale.US, "%.0f MB used", totalMb)
+        binding.tvStorageBreakdown.text = "STT  %s MB    ·    TTS  %s MB".format(
+            String.format(Locale.US, "%.0f", sttBytes / (1024.0 * 1024.0)),
+            String.format(Locale.US, "%.0f", ttsBytes / (1024.0 * 1024.0))
+        )
+        binding.storageBar.progress = min(512, totalMb.toInt())
     }
+
+    // ---------------- Util ----------------
+
+    private fun getDrawableCompat(id: Int) = ContextCompat.getDrawable(this, id)
+    private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 }

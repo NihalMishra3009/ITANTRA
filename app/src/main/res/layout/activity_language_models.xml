@@ -1,62 +1,177 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:background="@color/bg_black"
+    android:descendantFocusability="blocksDescendants"
     android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp">
+        android:padding="16dp">
 
-        <TextView
+        <!-- Header -->
+        <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:letterSpacing="0.08"
-            android:text="@string/model_screen_title"
-            android:textAllCaps="true"
-            android:textColor="@color/text_white"
-            android:textSize="18sp"
-            android:textStyle="bold" />
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
 
-        <TextView
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="4dp"
-            android:text="@string/model_screen_subtitle"
-            android:textColor="@color/text_faint"
-            android:textSize="12sp" />
+            <FrameLayout
+                android:id="@+id/btnBack"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_button_rounded"
+                android:backgroundTint="@color/bg_surface_raised"
+                android:clickable="true"
+                android:focusable="true"
+                android:contentDescription="Back">
 
-        <!-- Storage summary -->
-        <TextView
-            android:id="@+id/tvStorageSummary"
+                <ImageView
+                    android:layout_width="20dp"
+                    android:layout_height="20dp"
+                    android:layout_gravity="center"
+                    android:contentDescription="@null"
+                    android:src="@drawable/ic_back"
+                    app:tint="@color/text_white" />
+            </FrameLayout>
+
+            <LinearLayout
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="14dp"
+                android:layout_weight="1"
+                android:orientation="vertical">
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:letterSpacing="0.06"
+                    android:text="@string/model_screen_title"
+                    android:textColor="@color/text_white"
+                    android:textSize="20sp"
+                    android:textStyle="bold" />
+
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="2dp"
+                    android:text="@string/model_screen_subtitle"
+                    android:textColor="@color/text_faint"
+                    android:textSize="12sp" />
+            </LinearLayout>
+        </LinearLayout>
+
+        <!-- Horizontal tab bar -->
+        <LinearLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
+            android:layout_height="44dp"
             android:layout_marginTop="16dp"
             android:background="@drawable/bg_surface_chip"
-            android:padding="14dp"
-            android:text="Installed model storage: 0 MB"
-            android:textColor="@color/comm_green"
-            android:textSize="13sp"
-            android:textStyle="bold" />
+            android:orientation="horizontal">
 
-        <!-- Language list (populated dynamically) -->
+            <TextView
+                android:id="@+id/btnTabInstalled"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/seg_selectable"
+                android:gravity="center"
+                android:text="@string/tab_installed"
+                android:textColor="@color/text_white"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/bg_elevated" />
+
+            <TextView
+                android:id="@+id/btnTabAvailable"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/seg_selectable"
+                android:gravity="center"
+                android:text="@string/tab_available"
+                android:textColor="@color/text_white"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+
+            <View
+                android:layout_width="1dp"
+                android:layout_height="match_parent"
+                android:background="@color/bg_elevated" />
+
+            <TextView
+                android:id="@+id/btnTabAll"
+                android:layout_width="0dp"
+                android:layout_height="match_parent"
+                android:layout_weight="1"
+                android:background="@drawable/seg_selectable"
+                android:gravity="center"
+                android:text="@string/tab_all"
+                android:textColor="@color/text_white"
+                android:textSize="12sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Model storage card -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:background="@drawable/bg_surface_chip"
+            android:orientation="vertical"
+            android:padding="14dp">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:letterSpacing="0.1"
+                android:text="@string/model_storage"
+                android:textColor="@color/text_faint"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+
+            <ProgressBar
+                android:id="@+id/storageBar"
+                style="@android:style/Widget.ProgressBar.Horizontal"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="10dp"
+                android:max="512"
+                android:progressTint="@color/comm_green"
+                android:progressBackgroundTint="@color/bg_elevated" />
+
+            <TextView
+                android:id="@+id/tvStorageUsed"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="8dp"
+                android:textColor="@color/text_white"
+                android:textSize="14sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/tvStorageBreakdown"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="4dp"
+                android:textColor="@color/comm_green"
+                android:textSize="12sp" />
+        </LinearLayout>
+
+        <!-- Language pack cards -->
         <LinearLayout
             android:id="@+id/container"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:layout_marginTop="8dp"
             android:orientation="vertical" />
-
-        <TextView
-            android:id="@+id/tvRelayNote"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="TIP: Relay nodes do NOT need any speech model. A relay only needs networking/routing/DTN — keep it light."
-            android:textColor="@color/text_muted"
-            android:textSize="12sp" />
     </LinearLayout>
 </ScrollView>

@@ -50,7 +50,8 @@ data class LanguageModelPack(
     val isArchive: Boolean = false,  // true when downloadUrl is a .tar.bz2 containing model.onnx+tokens.txt
     val isMultilingualShared: Boolean, // true = shared checkpoint, not per-language
     val supportsLanguage: Boolean,   // whether this model genuinely supports the language
-    val notes: String
+    val notes: String,
+    val isEngine: Boolean = false    // true = shared engine pack (e.g. Whisper upgrade), not per-language
 ) {
     val sizeMb: Double get() = sizeBytes / (1024.0 * 1024.0)
 }
