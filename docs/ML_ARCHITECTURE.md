@@ -36,6 +36,7 @@ The rest of ITANTRA (pipeline, UI, networking) talks only to `SpeechModelManager
 | STT | Whisper base int8 (existing fallback) | sherpa-onnx | ACTIVE (covers all 10 langs) |
 | TTS | **IndicF5 INT8** (high-quality, mobile-optimized) | sherpa-onnx | NOT a runtime dependency (safetensors, no English support, needs conversion) |
 | TTS | VITS / Piper voice packs (downloadable) | sherpa-onnx | ACTIVE for hi, en, ml, gu, bn |
+| TTS | Meta MMS-TTS intermediate (downloadable) | sherpa-onnx | ACTIVE for mr, kn, ta, te, or (hosted tar.bz2, SHA-256 verified) |
 | TTS | VITS bn (bundled fallback) | sherpa-onnx | ACTIVE |
 | VAD | Silero | sherpa-onnx | asset present but v4 incompatible → energy fallback |
 
@@ -69,4 +70,4 @@ user picks a language
 
 ## 6. Deployment Reality
 
-The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **VITS/Piper** with bundled Bengali fallback plus downloadable voice packs for hi, en, ml, gu, bn. IndicConformer / IndicF5 are cataloged but **not runtime dependencies** of this prototype. This is reported honestly in the UI/diagnostics.
+The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **VITS/Piper/MMS** with bundled Bengali fallback plus downloadable voice packs for **all 10 languages**: Piper/Coqui/Mimic3 for hi, en, ml, gu, bn and hosted Meta MMS-TTS (converted ONNX) for mr, kn, ta, te, or. IndicConformer / IndicF5 are cataloged but **not runtime dependencies** of this prototype. This is reported honestly in the UI/diagnostics.

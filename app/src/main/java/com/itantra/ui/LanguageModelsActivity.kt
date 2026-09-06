@@ -74,60 +74,11 @@ class LanguageModelsActivity : AppCompatActivity() {
             smm.enginePacks().forEach { binding.container.addView(engineCard(it)) }
         }
 
-        // Meta MMS-TTS voices (real path to TTS for languages with no Piper/Coqui sherpa voice).
-        binding.container.addView(mmsSection())
-
         orderedLanguagePacks()
             .filter { matchesTab(it) }
             .forEach { binding.container.addView(languageCard(it)) }
 
         renderStorage()
-    }
-
-    /** MMS-TTS availability strip — honest conversion status per language. */
-    private fun mmsSection(): LinearLayout {
-        val section = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = getDrawableCompat(R.drawable.bg_card)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { bottomMargin = dp(12) }
-            setPadding(dp(14), dp(14), dp(14), dp(12))
-        }
-        section.addView(TextView(this).apply {
-            text = "Meta MMS-TTS (covers all remaining languages)"
-            setTextColor(getColor(R.color.text_white))
-            textSize = 15f
-            setTypeface(typeface, android.graphics.Typeface.BOLD)
-        })
-        section.addView(TextView(this).apply {
-            text = "One arXiv-open multilingual voice model — the only loadable-sherpa route to TTS for Marathi, Kannada, Tamil, Telugu, Odia. Requires a one-time build-time ONNX conversion."
-            setTextColor(getColor(R.color.text_muted))
-            textSize = 11f
-            setPadding(0, 4, 0, 0)
-        })
-        for (pack in smm.mmsTtsPacks()) {
-            val status = smm.distributionManager().status(pack)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(8), 0, 0)
-            }
-            row.addView(TextView(this).apply {
-                text = "${pack.language.displayName} (${pack.language.nativeName})"
-                setTextColor(getColor(R.color.text_white))
-                textSize = 13f
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            })
-            row.addView(TextView(this).apply {
-                text = if (status == PackStatus.INSTALLED) "✓ Installed" else "Needs conversion"
-                setTextColor(getColor(if (status == PackStatus.INSTALLED) R.color.comm_green else R.color.comm_amber))
-                textSize = 12f
-            })
-            section.addView(row)
-        }
-        return section
     }
 
     private fun engineVisible(): Boolean = when (activeTab) {

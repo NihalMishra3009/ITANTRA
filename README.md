@@ -62,10 +62,8 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
 - **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
 - **10 Indian Languages — STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
 - **Downloadable TTS Voice Packs (offline after install)**:
-  - Prototype scope is **Hindi + English**; each language pack is downloaded once, SHA-256 verified, extracted and loaded via sherpa-onnx.
-  - Verified downloadable voices exist today for **Hindi, English, Malayalam, Gujarati and Bengali** (Piper/VITS + Mimic-3/Coqui).
+  - Verified downloadable voices exist for **all 10 languages**: Hindi, English, Malayalam, Gujarati and Bengali (Piper/VITS + Mimic-3/Coqui) plus Marathi, Kannada, Tamil, Telugu, Odia (Meta MMS-TTS converted to sherpa-onnx VITS, hosted on the iTantra release, SHA-256 verified).
   - Bengali VITS (`vits_bn`) is still bundled in the APK as a zero-download fallback.
-  - Languages without a sherpa-compatible voice (mr/kn/ta/te/or) are reported honestly as unavailable — never faked.
   - **IndicConformer / IndicF5 are NOT runtime dependencies** of this prototype (their published checkpoints are not directly loadable through the current Android pipeline).
 - **Real Model Inference (ONNX Runtime)**:
   - **VAD**: Silero VAD (v5/v6 compatible via sherpa-onnx).

@@ -71,17 +71,14 @@ class ModelCatalogTest {
         for (lang in nine) {
             assertTrue("IndicConformer should support $lang", ModelCatalog.sttPack(lang)!!.supportsLanguage)
         }
-        // TTS: only languages that genuinely HAVE a loadable voice are downloadable;
-        // the rest must honestly report NOT AVAILABLE (no fake).
-        val available = setOf("hi", "gu", "ml", "bn")
-        val unavailable = nine - available
-        for (lang in available) {
-            assertTrue("$lang TTS must be downloadable (real voice)", ModelCatalog.ttsPack(lang)!!.downloadUrl != null)
-        }
-        for (lang in unavailable) {
+        // TTS: every language now has a genuinely downloadable voice with a real
+        // SHA-256. Piper/Coqui/Mimic3 cover hi/gu/ml/bn/en; hosted MMS-TTS covers
+        // the other 5 Indic languages (mr/kn/ta/te/or).
+        for (lang in nine) {
             val tts = ModelCatalog.ttsPack(lang)!!
-            assertTrue("$lang TTS has no real voice; must not offer a fake download",
-                tts.downloadUrl == null || !tts.supportsLanguage)
+            assertTrue("$lang TTS must have a real download URL", tts.downloadUrl != null)
+            assertTrue("$lang TTS must have a real SHA-256", tts.checksumSha256.isNotBlank())
+            assertTrue("$lang TTS must be genuinely supported", tts.supportsLanguage)
         }
         // English TTS genuinely available via Piper.
         assertTrue("en TTS must be downloadable", ModelCatalog.ttsPack("en")!!.downloadUrl != null)

@@ -102,6 +102,12 @@ object ModelCatalog {
                 notes = "Genuine downloadable voice (verified SHA-256). Download → install → fully offline TTS."
             )
         }
+        // Meta MMS-TTS converted voice (hosted tar.bz2) — covers the 5 Indic languages
+        // with no Piper/Coqui sherpa voice. Loadable by sherpa-onnx VITS front-end.
+        val mms = if (lang.code in mmsSha) mmsPack(lang.code) else null
+        if (mms != null && mms.downloadUrl != null) {
+            return mms.copy(id = "tts_${lang.code}")
+        }
         val convertedAvailable = convertedArtifactExists("models/tts/indicf5_${lang.code}/model.onnx")
         return LanguageModelPack(
             id = "tts_${lang.code}",
@@ -222,29 +228,33 @@ object ModelCatalog {
     )
 
     /** Converted Meta MMS-TTS voice packs (VITS-format, loadable by sherpa-onnx).
-     *  Real converted artifacts now exist (see model-conversion/convert_mms_tts_onnx.py);
-     *  each ~109 MB. downloadUrl stays null until a host is configured — the app can
-     *  load a bundled asset from assets/models/tts/mms_<code>/ fallback path too. */
+     *  Converted + verified ONNX artifacts are HOSTED on the iTantra GitHub release
+     *  `mms-tts` (see model-conversion/convert_mms_tts_onnx.py). Download → verify
+     *  SHA-256 → extract → fully offline TTS for these languages. */
     fun mmsTtsPacks(): List<LanguageModelPack> = listOf(
-        mmsPack("mr", "Marathi"),
-        mmsPack("kn", "Kannada"),
-        mmsPack("ta", "Tamil"),
-        mmsPack("te", "Telugu"),
-        mmsPack("or", "Odia")
+        mmsPack("mr"),
+        mmsPack("kn"),
+        mmsPack("ta"),
+        mmsPack("te"),
+        mmsPack("or")
     )
 
+    /** Host base for the converted MMS-TTS tar.bz2 archives (GitHub release). */
+    private const val MMS_RELEASE_BASE =
+        "https://github.com/NihalMishra3009/ITANTRA/releases/download/mms-tts"
+
+    /** tar.bz2 archive SHA-256 (the thing actually downloaded + verified). */
     private val mmsSha = mapOf(
-        "mr" to "cfdae357b5feff04b0c9c7f73036ed8ef1cadb2648dee738920ff5259ba5bac9",
-        "kn" to "27c30d700dbb6c4d7869dc3983d4282ef17c8c65fc457445e67a7637534cc80c",
-        "ta" to "af4b8d139969371a31412da0f7d9cc21da17cfd542af8a903a1c216847ecbd4e",
-        "te" to "dafe7ef330e79cfb98a9e05561c34d18d52bc29c4ab3e106b18d6bd07e756e4f",
-        "or" to "0e15632e0c5eaabc46284acdbde4af9ce3b6437d2aaf07287bbc2da2bf1cdb63"
+        "mr" to "fe4125718f5023e8fb1854199cfe145a2e54bb2efc26c5c329f914176ffacfcd",
+        "kn" to "4f17983600ea2a56a01bc9dc86dc2a328e4c925dfb7f4e019b3ec6bb505c7698",
+        "ta" to "7a3b2233cd546ff9b79852b9c63758e325d9d62aab436fe1976ee4ac89fa8fd4",
+        "te" to "cb1222f7301e46d7e597d671c27f712d094c5d93d50d2dd49c47fc28ed2051bb",
+        "or" to "a564d7f91d98b4311302ef5800168918ebbf6a887a94e834c3f233bc344c11c5"
     )
-    private val mmsSize = mapOf("mr" to 114_054_267L, "kn" to 114_055_803L, "ta" to 114_042_747L, "te" to 114_048_123L, "or" to 114_056_571L)
+    private val mmsSize = mapOf("mr" to 107_756_072L, "kn" to 107_749_974L, "ta" to 107_733_234L, "te" to 107_768_327L, "or" to 107_748_930L)
 
-    /** Real Meta MMS-TTS voice, checksum/size pinned from the actual converted artifact.
-     *  Available when a converted asset is bundled (assets/models/tts/mms_<code>/model.onnx). */
-    private fun mmsPack(code: String, name: String): LanguageModelPack {
+    /** Real Meta MMS-TTS voice, checksum/size pinned from the hosted archive. */
+    private fun mmsPack(code: String): LanguageModelPack {
         val lang = com.itantra.stt.SupportedLanguage.fromCode(code)
         val sha = mmsSha[code] ?: ""
         val sz = mmsSize[code] ?: 0L
@@ -253,22 +263,22 @@ object ModelCatalog {
             id = "tts_mms_${code}",
             language = lang,
             role = ModelRole.TTS,
-            modelName = "Meta MMS-TTS ($name)",
+            modelName = "Meta MMS-TTS (${lang.displayName})",
             version = "2024-01",
-            sizeBytes = if (convertedAvailable) convertedSize("models/tts/mms_${code}/model.onnx") else sz,
+            sizeBytes = sz,
             checksumSha256 = sha,
             license = "CC-BY-NC 4.0",
             runtime = Mlruntime.SHERPA_VITS,
             quantization = Quantization.FP32,
             sampleRate = 16000,
             supportedDeviceClass = DeviceClass.HIGH,
-            downloadUrl = null, // no public host for the 109MB artifacts yet
-            isArchive = false,
+            downloadUrl = "$MMS_RELEASE_BASE/vits-mms-$code.tar.bz2",
+            isArchive = true,
             isMultilingualShared = false,
             supportsLanguage = true,
             notes = if (convertedAvailable)
                 "Meta MMS-TTS converted to sherpa VITS ONNX — bundled, offline, loadable."
-            else "Meta MMS-TTS (covers ${lang.displayName}) — converted ONNX ready (109 MB). Add assets/models/tts/mms_${code}/model.onnx to bundle it; or set a downloadUrl to host it. See model-conversion/convert_mms_tts_onnx.py.",
+            else "Meta MMS-TTS (covers ${lang.displayName}) — downloaded from iTantra release, SHA-256 verified, fully offline after install.",
             isEngine = false
         )
     }

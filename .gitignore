@@ -17,3 +17,4 @@ local.properties
 .idea
 *.apk
 *.aab
+/model-conversion/converted/

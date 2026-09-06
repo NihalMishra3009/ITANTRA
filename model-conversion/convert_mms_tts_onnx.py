@@ -49,8 +49,12 @@ def download(url: str, dest: str) -> None:
 def build_monotonic_align(mms: str) -> None:
     align = os.path.join(mms, "vits", "monotonic_align")
     import shutil
-    # The MMS-space __init__.py imports `from .monotonic_align.core import ...`
+    # Skip rebuild when a compiled core.pyd already exists (e.g. prebuilt for this
+    # platform). The MMS-space __init__.py imports `from .monotonic_align.core ...`
     # but only ships a single level; sherpa's recipe rewrites it to `.core`.
+    if os.path.exists(os.path.join(align, "core.pyd")):
+        print("[cython] core.pyd present — skipping monotonic_align rebuild")
+        return
     print("[cython] build monotonic_align")
     subprocess.run([sys.executable, "setup.py", "build_ext", "--inplace"],
                    cwd=align, check=True)
@@ -92,6 +96,7 @@ def main() -> None:
     sys.path.insert(0, os.path.abspath(os.path.join(mms, "vits")))
     build_monotonic_align(mms)
 
+    import collections
     import onnx
     import torch
     from vits import utils
@@ -101,9 +106,11 @@ def main() -> None:
         def __init__(self, model):
             super().__init__()
             self.model = model
-        def forward(self, x, x_lengths, noise_scale=0.667,
-                    length_scale=1.0, noise_scale_w=0.8):
-            return self.model.infer(x=x, x_lengths=x_lengths,
+        def forward(self, x, x_length,
+                    noise_scale=torch.tensor([1], dtype=torch.float32),
+                    length_scale=torch.tensor([1], dtype=torch.float32),
+                    noise_scale_w=torch.tensor([1], dtype=torch.float32)):
+            return self.model.infer(x=x, x_lengths=x_length,
                                     noise_scale=noise_scale,
                                     length_scale=length_scale,
                                     noise_scale_w=noise_scale_w)[0]
@@ -134,26 +141,41 @@ def main() -> None:
     onnx_model = OnnxModel(model)
     x = torch.randint(low=0, high=len(vocab), size=(25,), dtype=torch.long).reshape(1, 25)
     x_lengths = torch.tensor([25], dtype=torch.long)
+    noise_scale = torch.tensor([1], dtype=torch.float32)
+    length_scale = torch.tensor([1], dtype=torch.float32)
+    noise_scale_w = torch.tensor([1], dtype=torch.float32)
 
     onnx_path = os.path.join(out, "model.onnx")
     print("[onnx] export (takes a few minutes)")
-    torch.onnx.export(onnx_model, (x, x_lengths), onnx_path, opset_version=14,
-                      dynamo=False,  # legacy tracer — torch 2.x default exporter is incompatible
-                      input_names=["x", "x_lengths"], output_names=["output"],
-                      dynamic_axes={"x": {0: "n", 1: "t"}, "x_lengths": {0: "n"}})
+    torch.onnx.export(onnx_model,
+                      (x, x_lengths, noise_scale, length_scale, noise_scale_w),
+                      onnx_path, opset_version=13,
+                      dynamo=False,
+                      input_names=["x", "x_length", "noise_scale", "length_scale", "noise_scale_w"],
+                      output_names=["y"],
+                      dynamic_axes={"x": {0: "n", 1: "t"}, "x_length": {0: "n"}})
     add_meta_data(onnx_path, {
         "model_type": "vits",
         "comment": f"converted from facebook/mms-tts /{lang}/",
+        "url": "https://huggingface.co/facebook/mms-tts/tree/main",
         "language": lang,
-        "add_blank": "0",
-        "n_speakers": "1",
-        "sample_rate": str(hps.data.sampling_rate),
-        "vocab_size": str(len(vocab)),
-        "filename": "model.onnx",
-        "tokens": "tokens.txt",
+        "add_blank": int(hps.data.add_blank),
+        "n_speakers": int(hps.data.n_speakers),
+        "sample_rate": hps.data.sampling_rate,
+        "frontend": "characters",
     })
+
+    all_upper_tokens = [i.upper() for i in vocab]
+    duplicate = set(
+        [item for item, count in collections.Counter(all_upper_tokens).items() if count > 1]
+    )
     with open(os.path.join(out, "tokens.txt"), "w", encoding="utf-8") as fh:
-        fh.write("\n".join(vocab) + "\n")
+        for idx, token in enumerate(vocab):
+            fh.write(f"{token} {idx}\n")
+            if (token.lower() != token.upper()
+                    and len(token.upper()) == 1
+                    and token.upper() not in duplicate):
+                fh.write(f"{token.upper()} {idx}\n")
     print("DONE ->", onnx_path, os.path.getsize(onnx_path), "bytes")
     print("tokens ->", os.path.join(out, "tokens.txt"))
 

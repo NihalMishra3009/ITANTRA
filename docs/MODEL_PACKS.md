@@ -41,13 +41,16 @@ Status is derived from actual files + in-progress download flags — never a UI 
 | TTS | IndicF5 | MIT | hi,gu,mr,kn,ml,ta,te,or,bn | **single multilingual checkpoint** |
 | STT | Whisper base int8 (fallback) | MIT | **all 10 including English** | bundled in APK |
 | TTS | VITS bn (fallback) | MIT | bn | bundled in APK |
+| TTS | Piper hi/ml, Coqui bn, Mimic3 gu, Piper en | MIT / CC-BY / CC-BY-NC | hi,ml,bn,gu,en | downloadable sherpa voice packs |
+| TTS | Meta MMS-TTS (converted ONNX) | CC-BY-NC | mr,kn,ta,te,or | downloadable tar.bz2 (hosted iTantra release) |
 
 **Honesty notes:**
 - IndicConformer is ONE shared checkpoint, NOT 10 per-language files. Downloading
   "Hindi STT" installs the shared checkpoint (+ the Hindi CTC head) — the app reports
   the real shared size, never a fabricated 1/10 split.
-- IndicF5 has **no English**. English TTS is therefore reported NOT AVAILABLE until a
-  separate open-source English TTS candidate is added.
+- IndicF5 has **no English** and is not yet converted; all 10 languages instead use
+  a genuinely downloadable voice: Piper/Coqui/Mimic3 for hi,ml,bn,gu,en and hosted
+  converted Meta MMS-TTS for mr,kn,ta,te,or (each SHA-256 verified).
 - IndicConformer has **no English ASR**. English STT uses the bundled Whisper fallback.
 
 ## Independent STT/TTS
