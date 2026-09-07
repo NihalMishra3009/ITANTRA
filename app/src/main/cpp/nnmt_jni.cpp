@@ -174,6 +174,13 @@ static int64_t argmaxOverLogits(const std::vector<float>& logits, int64_t rowSta
     return best;
 }
 
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_itantra_translation_OpusMtTranslationEngine_nnNativeTest(JNIEnv* env, jobject) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!ensureOrtApiLocked()) return env->NewStringUTF("NATIVE_TEST_FAIL:no-ort");
+    return env->NewStringUTF("NATIVE_TEST_OK");
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_itantra_translation_OpusMtTranslationEngine_nnRelease(JNIEnv* env, jobject) {
     std::lock_guard<std::mutex> lk(g_mtx);

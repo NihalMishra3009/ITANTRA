@@ -40,6 +40,27 @@ class OpusMtTranslationEngine(
     private val loaded = AtomicBoolean(false)
     private var loadedKey: String? = null
 
+    init {
+        // One-time off-main native self-test: load lib + resolve ORT C API. Logged
+        // so on-device ARM64 validation is observable in logcat (itan_mt). Failure
+        // is non-fatal — translation still reports UNAVAILABLE.
+        try {
+            java.util.concurrent.Executors.newSingleThreadExecutor().execute {
+                val tag = "itan_mt"
+                android.util.Log.i(tag, "nativeSelfTest -> " + nativeSelfTest())
+            }
+        } catch (_: Throwable) {}
+    }
+
+    /** On-device native self-test: load lib, resolve ORT C API, respond OK/FAIL. */
+    fun nativeSelfTest(): String {
+        val loadedOk = ensureNativeLoaded()
+        if (!loadedOk) return "NATIVE_TEST_FAIL:no-lib"
+        return try { nnNativeTest() } catch (e: Throwable) {
+            "NATIVE_TEST_FAIL:" + (e.message ?: "err")
+        }
+    }
+
     private fun ensureNativeLoaded(): Boolean {
         if (nativeLoaded) return true
         if (loadAttempted) return false
@@ -157,4 +178,7 @@ class OpusMtTranslationEngine(
 
     /** Native: drop the cached env/sessions for the current pair. */
     private external fun nnRelease()
+
+    /** Native: load lib + resolve ORT C API; returns NATIVE_TEST_OK on success. */
+    private external fun nnNativeTest(): String
 }
