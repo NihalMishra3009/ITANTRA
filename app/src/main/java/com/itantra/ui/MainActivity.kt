@@ -185,7 +185,10 @@ class MainActivity : AppCompatActivity() {
                     orchestrator.currentLanguage = lang
                     // (Re)initialize STT/TTS engines for this language — loads a
                     // downloaded voice pack when present, native asset otherwise.
-                    orchestrator.speechModelManager.selectLanguage(lang)
+                    // Heavy sherpa model load runs OFF the main/UI thread.
+                    lifecycleScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                        orchestrator.speechModelManager.selectLanguage(lang)
+                    }
                 }
                 adapter.notifyDataSetChanged()
             }
@@ -349,10 +352,9 @@ class MainActivity : AppCompatActivity() {
                 .setNegativeButton(getString(R.string.sos_cancel), null)
                 .setPositiveButton(getString(R.string.sos_send)) { _, _ ->
                     Toast.makeText(this, getString(R.string.sos_active), Toast.LENGTH_SHORT).show()
-                    orchestrator.onPttPressed(isAlert = true)
-                    binding.root.postDelayed({
-                        orchestrator.onPttReleased()
-                    }, 1000)
+                    // Dedicated emergency path: no microphone, no STT required.
+                    orchestrator.sendSos()
+                    renderSos(orchestrator.sosState.value)
                 }
                 .show()
         }
@@ -441,6 +443,12 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             orchestrator.topologyTick.collectLatest {
                 runOnUiThread { refreshPeerState() }
+            }
+        }
+
+        lifecycleScope.launch {
+            orchestrator.sosState.collectLatest { state ->
+                runOnUiThread { renderSos(state) }
             }
         }
 
@@ -581,6 +589,42 @@ class MainActivity : AppCompatActivity() {
                 tintRadar(red, true)
             }
         }
+    }
+
+    /** Render the REAL SOS propagation state on the alert control + status line. */
+    private fun renderSos(state: com.itantra.orchestrator.SosState) {
+        val red = ContextCompat.getColor(this, R.color.comm_red)
+        val amber = ContextCompat.getColor(this, R.color.comm_amber)
+        val green = ContextCompat.getColor(this, R.color.comm_green)
+        val white = ContextCompat.getColor(this, R.color.text_white)
+
+        val label = when (state) {
+            com.itantra.orchestrator.SosState.READY -> getString(R.string.sos_ready)
+            com.itantra.orchestrator.SosState.SENDING -> getString(R.string.sos_sending)
+            com.itantra.orchestrator.SosState.RELAYING -> getString(R.string.sos_relaying)
+            com.itantra.orchestrator.SosState.DELIVERED -> getString(R.string.sos_delivered)
+            com.itantra.orchestrator.SosState.RETRYING -> getString(R.string.sos_retrying)
+            com.itantra.orchestrator.SosState.QUEUED_NO_PEER -> getString(R.string.sos_queued_nopeer)
+            com.itantra.orchestrator.SosState.FAILED -> getString(R.string.sos_failed)
+        }
+        val color = when (state) {
+            com.itantra.orchestrator.SosState.READY -> white
+            com.itantra.orchestrator.SosState.SENDING -> amber
+            com.itantra.orchestrator.SosState.RELAYING -> amber
+            com.itantra.orchestrator.SosState.DELIVERED -> green
+            com.itantra.orchestrator.SosState.RETRYING -> amber
+            com.itantra.orchestrator.SosState.QUEUED_NO_PEER -> amber
+            com.itantra.orchestrator.SosState.FAILED -> red
+        }
+        // Surface SOS state without clobbering the main PTT status: render into the
+        // connection summary line only when a packet is in flight.
+        if (state != com.itantra.orchestrator.SosState.READY) {
+            binding.tvConnSummary.text = "🚨 $label"
+            binding.tvConnSummary.setTextColor(color)
+        } else {
+            refreshPeerState()
+        }
+        binding.tvStatusText.text = if (state != com.itantra.orchestrator.SosState.READY) label else binding.tvStatusText.text
     }
 
     /** Apply color + subtle pulse animation to the radar visual. */

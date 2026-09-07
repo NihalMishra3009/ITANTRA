@@ -9,6 +9,10 @@ import android.util.Log
 
 /**
  * Manages audio focus and stream volume for normal voice and high-priority alert playback.
+ *
+ * Alert playback temporarily raises the alarm/media volume to maximum, then RESTORES
+ * the previous volume after playback ends — the user's device volume is never
+ * permanently changed.
  */
 class AudioFocusManager(private val context: Context) {
     companion object {
@@ -18,13 +22,25 @@ class AudioFocusManager(private val context: Context) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
     private var audioFocusRequest: AudioFocusRequest? = null
 
+    private var savedVolume = -1
+    private var savedVolumeStream = AudioManager.STREAM_MUSIC
+    private var volumeRaised = false
+
     fun requestFocus(isAlert: Boolean): Boolean {
         return try {
             if (isAlert) {
-                // For alert mode: Set max application-controlled alarm volume
-                val maxAlarmVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_ALARM)
-                audioManager.setStreamVolume(AudioManager.STREAM_ALARM, maxAlarmVol, 0)
-                Log.i(TAG, "Alert mode: Alarm stream volume set to max ($maxAlarmVol)")
+                // Save previous volume, then raise it for uninterrupted emergency alert.
+                savedVolumeStream = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    AudioManager.STREAM_ALARM
+                } else {
+                    @Suppress("DEPRECATION")
+                    AudioManager.STREAM_ALARM
+                }
+                savedVolume = audioManager.getStreamVolume(savedVolumeStream)
+                val maxAlarmVol = audioManager.getStreamMaxVolume(savedVolumeStream)
+                audioManager.setStreamVolume(savedVolumeStream, maxAlarmVol, 0)
+                volumeRaised = true
+                Log.i(TAG, "Alert mode: alarm stream volume raised to max ($maxAlarmVol); saved=$savedVolume")
             }
 
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -39,7 +55,7 @@ class AudioFocusManager(private val context: Context) {
 
                 val focusRequest = AudioFocusRequest.Builder(gainType)
                     .setAudioAttributes(playbackAttributes)
-                    .setAcceptsDelayedFocusGain(false)
+                    .setAcceptsDelayedFocusGain(true)
                     .setOnAudioFocusChangeListener { focusChange ->
                         Log.d(TAG, "Audio focus changed: $focusChange")
                     }
@@ -66,6 +82,15 @@ class AudioFocusManager(private val context: Context) {
 
     fun abandonFocus() {
         try {
+            if (volumeRaised) {
+                // Restore the user's previous volume after the alert finishes.
+                if (savedVolume >= 0) {
+                    audioManager.setStreamVolume(savedVolumeStream, savedVolume, 0)
+                    Log.i(TAG, "Restored ${if (savedVolumeStream == AudioManager.STREAM_ALARM) "alarm" else "music"} volume to $savedVolume")
+                }
+                volumeRaised = false
+                savedVolume = -1
+            }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 audioFocusRequest?.let { audioManager.abandonAudioFocusRequest(it) }
             } else {

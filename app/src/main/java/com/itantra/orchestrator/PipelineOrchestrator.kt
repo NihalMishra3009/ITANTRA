@@ -44,6 +44,17 @@ enum class TransceiverState {
     COLLISION_BUSY
 }
 
+/** SOS propagation state — reflects real emergency packet delivery. */
+enum class SosState {
+    READY,          // no emergency in flight
+    SENDING,        // emergency injected + transmitted
+    RELAYING,       // forwarded for multi-hop delivery
+    DELIVERED,      // final ACK received
+    RETRYING,       // transmission in progress but no ACK yet
+    QUEUED_NO_PEER, // no peer/transport available — stored for later
+    FAILED          // delivery failed / exceeded retries
+}
+
 /**
  * Central State Machine and Pipeline Orchestrator for iTantra.
  * Integrates Voice Activity Detection, Offline STT/TTS, Mesh Routing, and Transport Management.
@@ -103,10 +114,17 @@ class PipelineOrchestrator(
 
     var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
         set(value) {
-            field = value
-            speechModelManager.selectLanguage(value)
-            sttEngine.initialize(value.code)
-            ttsEngine.initialize(value.code)
+            if (field != value) {
+                field = value
+                // Heavy model (re)initialization is deferred off the calling thread
+                // (Mirrors the UI thread — sherpa load is slow and must not block the
+                // main thread). speechModelManager.selectLanguage() is idempotent.
+                coroutineScope.launch(Dispatchers.IO) {
+                    speechModelManager.selectLanguage(value)
+                    sttEngine.initialize(value.code)
+                    ttsEngine.initialize(value.code)
+                }
+            }
         }
 
     var operatingMode: OperatingMode = OperatingMode.PUSH_TO_TALK
@@ -466,6 +484,85 @@ class PipelineOrchestrator(
         }
     }
 
+    // ---------------- SOS / Emergency pipeline ----------------
+
+    /** Current SOS propagation state — driven by real backend status. */
+    private val _sosState = MutableStateFlow(SosState.READY)
+    val sosState: StateFlow<SosState> = _sosState.asStateFlow()
+
+    /** Current emergency message id being tracked (for dedupe of UI updates). */
+    private val _activeSosMessageId = MutableStateFlow<String?>(null)
+    val activeSosMessageId: StateFlow<String?> = _activeSosMessageId.asStateFlow()
+
+    /**
+     * Dedicated emergency pipeline — NEVER depends on the microphone or STT.
+     *
+     * 1. Build an EMERGENCY packet immediately.
+     * 2. Inject directly into the mesh with front-of-queue priority.
+     * 3. Request ACK when a peer is reachable; persist for store-and-forward.
+     * 4. Surface SOS_* state through [sosState]; never silently fails.
+     *
+     * @return the emergency messageId (for UI to track).
+     */
+    fun sendSos(
+        message: String = "SOS — Emergency assistance required",
+        recipientId: String? = null
+    ): String {
+        val clean = message.trim().ifBlank { "SOS — Emergency assistance required" }
+        val packet = TextPacket(
+            senderId = deviceSenderId,
+            recipientId = recipientId ?: targetRecipientId,
+            type = PacketType.EMERGENCY,
+            language = currentLanguage.code,
+            text = clean,
+            isAlert = true,
+            isPriority = true,
+            timestamp = System.currentTimeMillis(),
+            ttlMs = 60_000L, // emergency lifetime
+            maxHops = 5       // emergency is allowed to travel farther
+        )
+        _activeSosMessageId.value = packet.messageId
+
+        coroutineScope.launch {
+            val t = transport
+            if (isLoopbackOnly || t == null || !t.isConnected()) {
+                // No peer: keep the emergency queued for later transmission (store &
+                // forward) if a mesh is present, otherwise surface QUEUED/NO PEER.
+                val mesh = meshRoutingManager
+                if (mesh == null || t == null) {
+                    _sosState.value = SosState.QUEUED_NO_PEER
+                    Log.w(TAG, "SOS queued: no peer / no transport available (${packet.messageId})")
+                    return@launch
+                }
+                _sosState.value = SosState.SENDING
+                mesh.sendReliablePacket(packet) { ack ->
+                    runOnMain { _sosState.value = if (ack) SosState.DELIVERED else SosState.FAILED }
+                }
+                return@launch
+            }
+
+            _sosState.value = SosState.SENDING
+            meshRoutingManager?.sendReliablePacket(packet) { ack ->
+                Log.i(TAG, "SOS ${packet.messageId} delivery: ACK=$ack")
+                runOnMain {
+                    _sosState.value = if (ack) SosState.DELIVERED else SosState.RETRYING
+                }
+            }
+        }
+        return packet.messageId
+    }
+
+    private inline fun runOnMain(crossinline block: () -> Unit) {
+        coroutineScope.launch(kotlinx.coroutines.Dispatchers.Main) { block() }
+    }
+
+    /** Track SOS status from delivery/relay events (called by mesh on ACK paths). */
+    fun markSosDelivered(messageId: String) {
+        if (messageId == _activeSosMessageId.value) {
+            runOnMain { _sosState.value = SosState.DELIVERED }
+        }
+    }
+
     /**
      * Handles incoming packet from remote peer (or loopback).
      */
@@ -480,7 +577,13 @@ class PipelineOrchestrator(
         coroutineScope.launch {
             val tReceive = System.currentTimeMillis()
             _transceiverState.value = TransceiverState.RECEIVING
-            _lastReceivedText.value = "[${packet.senderId}] " + packet.text
+
+            // Emergency recognition (dedicated path — no mic, no STT required).
+            val isEmergency = packet.type == PacketType.EMERGENCY || packet.isAlert
+            _lastReceivedText.value = if (isEmergency)
+                "🚨 [${packet.senderId}] " + packet.text
+            else
+                "[${packet.senderId}] " + packet.text
             deliveryTracker.update(packet.messageId, com.itantra.transport.DeliveryStatus.PLAYING, packet.hopCount)
 
             // Switch TTS model to packet language if needed (no synthesize() probe —

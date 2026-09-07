@@ -72,6 +72,13 @@
     <string name="sos_send">SEND SOS</string>
     <string name="sos_active">🚨 SOS ACTIVE</string>
     <string name="sos_broadcasting">Broadcasting emergency message…</string>
+    <string name="sos_ready">SOS READY</string>
+    <string name="sos_sending">SOS SENDING</string>
+    <string name="sos_relaying">SOS RELAYING</string>
+    <string name="sos_delivered">SOS DELIVERED</string>
+    <string name="sos_retrying">SOS RETRYING</string>
+    <string name="sos_queued_nopeer">SOS QUEUED / NO PEER</string>
+    <string name="sos_failed">SOS FAILED</string>
 
     <!-- Network / models screens -->
     <string name="fatal_error">FATAL ERROR</string>

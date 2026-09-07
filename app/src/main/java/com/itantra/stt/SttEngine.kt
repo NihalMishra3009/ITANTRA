@@ -56,6 +56,7 @@ class SttEngine(
     private var isInitialized = false
     private var hasRealModel = false
 
+    @Synchronized
     override fun initialize(languageCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(languageCode)
         // ONE Whisper model covers all 10 languages — do not reload the 160MB
@@ -114,6 +115,7 @@ class SttEngine(
     override fun isModelLoaded(): Boolean = hasRealModel
 
     /** Force a rebuild from the current best source (downloaded engine if installed). */
+    @Synchronized
     fun reload(languageCode: String) {
         release()
         initialize(languageCode)
