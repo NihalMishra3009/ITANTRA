@@ -16,6 +16,26 @@ import java.security.MessageDigest
  */
 class ModelStorageManager(private val context: Context) {
 
+    val modelsDir: File = File(context.filesDir, MODELS_DIR)
+
+    fun sttDir(lang: String): File = File(modelsDir, "stt/${lang.lowercase()}")
+    fun ttsDir(lang: String): File = File(modelsDir, "tts/${lang.lowercase()}")
+    fun roleDir(role: ModelRole, lang: String): File =
+        if (role == ModelRole.STT) sttDir(lang) else ttsDir(lang)
+
+    fun tmpDir(role: ModelRole, lang: String): File = File(roleDir(role, lang), TMP_DIR)
+
+    /** Staging directory for an in-flight install (never visible as installed). */
+    fun stagingDir(role: ModelRole, lang: String): File =
+        File(File(modelsDir, STAGING_DIR), "${if (role == ModelRole.STT) "stt" else "tts"}/${lang.lowercase()}")
+
+    /**
+     * True iff this staged/installed pack passes REQUIRED-file validation for its
+     * role. A TTS voice needs model.onnx + tokens.txt; an STT engine needs at least
+     * one .onnx + tokens.txt. Never reports partial/missing packs as installed.
+     */
+    fun isCompletePack(dir: File, role: ModelRole): Boolean = Companion.isCompletePackFiles(dir)
+
     companion object {
         private const val MODELS_DIR = "models"
 
@@ -36,33 +56,16 @@ class ModelStorageManager(private val context: Context) {
 
         /** Manif stores a checksum sidecar for integrity re-verification after install. */
         const val CHECKSUM_FILE = "checksum.sha256"
-    }
 
-    val modelsDir: File = File(context.filesDir, MODELS_DIR)
-
-    fun sttDir(lang: String): File = File(modelsDir, "stt/${lang.lowercase()}")
-    fun ttsDir(lang: String): File = File(modelsDir, "tts/${lang.lowercase()}")
-    fun roleDir(role: ModelRole, lang: String): File =
-        if (role == ModelRole.STT) sttDir(lang) else ttsDir(lang)
-
-    fun tmpDir(role: ModelRole, lang: String): File = File(roleDir(role, lang), TMP_DIR)
-
-    /** Staging directory for an in-flight install (never visible as installed). */
-    fun stagingDir(role: ModelRole, lang: String): File =
-        File(File(modelsDir, STAGING_DIR), "${if (role == ModelRole.STT) "stt" else "tts"}/${lang.lowercase()}")
-
-    /**
-     * True iff this staged/installed pack passes REQUIRED-file validation for its
-     * role. A TTS voice needs model.onnx + tokens.txt; an STT engine needs at least
-     * one .onnx + tokens.txt. Never reports partial/missing packs as installed.
-     */
-    fun isCompletePack(dir: File, role: ModelRole): Boolean {
-        if (!dir.isDirectory) return false
-        val files = dir.listFiles { f -> f.isFile }?.toList() ?: return false
-        if (files.isEmpty()) return false
-        val hasTokens = files.any { it.name == TTS_TOKENS_FILE || it.name.equals("tokens.txt", true) }
-        val hasOnnx = files.any { it.name.endsWith(".onnx", ignoreCase = true) }
-        return hasTokens && hasOnnx
+        /** Pure (Context-free) required-file validation — unit-testable in JVM. */
+        fun isCompletePackFiles(dir: File): Boolean {
+            if (!dir.isDirectory) return false
+            val files = dir.listFiles { f -> f.isFile }?.toList() ?: return false
+            if (files.isEmpty()) return false
+            val hasTokens = files.any { it.name == TTS_TOKENS_FILE || it.name.equals("tokens.txt", true) }
+            val hasOnnx = files.any { it.name.endsWith(".onnx", ignoreCase = true) }
+            return hasTokens && hasOnnx
+        }
     }
 
     /** True if the pack directory exists AND contains the required model files. */
