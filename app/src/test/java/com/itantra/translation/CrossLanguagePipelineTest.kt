@@ -41,16 +41,24 @@ class TranslationCatalogTest {
     fun testHiEnAndEnHiSupported() {
         assertTrue(TranslationCatalog.supports("hi", "en"))
         assertTrue(TranslationCatalog.supports("en", "hi"))
-        assertEquals(setOf("hi-en", "en-hi"), TranslationCatalog.supportedPairIds())
+        // All 10 languages have direct EN<->X models: 2 directions × 9 langs = 18
+        // direct packs (en-en filtered out).
+        assertEquals(18, TranslationCatalog.supportedPairIds().size)
+        assertTrue(TranslationCatalog.supportedPairIds().contains("hi-en"))
+        assertTrue(TranslationCatalog.supportedPairIds().contains("en-hi"))
+        assertTrue(TranslationCatalog.supportedPairIds().contains("gu-en"))
     }
 
     @Test
     fun testUnsupportedPairsNotClaimed() {
-        assertFalse(TranslationCatalog.supports("hi", "kn"))
-        assertFalse(TranslationCatalog.supports("ml", "hi"))
-        assertFalse(TranslationCatalog.supports("kn", "ta"))
-        // Same codes direction not auto-supported
+        // Cross-language pairs are supported via the EN pivot, never directly.
+        assertTrue("hi->kn is supported (via en pivot)", TranslationCatalog.supports("hi", "kn"))
+        assertTrue("ml->hi is supported (via en pivot)", TranslationCatalog.supports("ml", "hi"))
+        assertTrue("kn->ta is supported (via en pivot)", TranslationCatalog.supports("kn", "ta"))
+        // Same codes is NOT auto-supported — no translation needed.
         assertFalse(TranslationCatalog.supports("hi", "hi"))
+        // A pair with both endpoints having no EN model is genuinely unavailable.
+        assertFalse(TranslationCatalog.supports("xx", "yy"))
     }
 }
 

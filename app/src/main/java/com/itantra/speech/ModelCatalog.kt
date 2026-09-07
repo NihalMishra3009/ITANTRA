@@ -295,12 +295,13 @@ object ModelCatalog {
     // and we never fabricate a download source/checksum.
     // ------------------------------------------------------------------
 
-    /** Genuine supported translation pairs (directed). */
+    /** All directed pairs with a real EN<->X model covering all 10 languages. */
     private val translationPairs: List<Pair<SupportedLanguage, SupportedLanguage>> =
-        listOf(
-            SupportedLanguage.HINDI to SupportedLanguage.ENGLISH,
-            SupportedLanguage.ENGLISH to SupportedLanguage.HINDI
-        ).filter { (s, t) -> TranslationCatalog.supports(s.code, t.code) }
+        (com.itantra.translation.TranslationCatalog.supportedPairIds()).mapNotNull { id ->
+            val (s, t) = id.split("-")
+            if (s == t) return@mapNotNull null
+            com.itantra.stt.SupportedLanguage.fromCode(s) to com.itantra.stt.SupportedLanguage.fromCode(t)
+        }
 
     /** Offline neural translation model packs (role TRANSLATION). */
     fun translationPacks(): List<LanguageModelPack> =
@@ -322,7 +323,7 @@ object ModelCatalog {
                 isArchive = false,
                 isMultilingualShared = false,
                 supportsLanguage = true,
-                notes = "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires model.onnx + tokens.txt under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet.",
+                notes = "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires encoder_model.onnx + decoder_model.onnx + config.json + tokenizer/ under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet.",
                 isEngine = false,
                 targetLanguage = tgt
             )

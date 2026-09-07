@@ -3,16 +3,20 @@
 ## Current architecture
 
 ```
-Hindi/English speech
+Hindi/English/any of 10 languages speech
   → Whisper base int8 STT (sherpa-onnx, source language)
   → CrossLanguagePipeline (source != target ⇒ translate; same-language bypass)
      └─ OpusMtTranslationEngine (JNI libitantra_mt.so)
          └─ dlopen(libonnxruntime.so) [bundled by sherpa-onnx, 1.27.x ORT C API]
          └─ encoder_model.onnx + decoder_model.onnx (greedy decode)
          └─ vendored sentencepiece (real SP, Marian-exact ids)
+         └─ X→Y cross-language: EN-PIVOT (X→EN→Y) when no direct model exists
   → TextPacket(language = target) → hop AEAD → radio/mesh
   → receiver TTS(language = packet.language)
 ```
+
+All 10 languages inter-translate offline: 18 direct `EN↔{9 locals}` packs, and
+any other X↔Y pairs use two real hops through English (never a fake/direct model).
 
 ## Model contract (see docs/OPUS_MT_ANDROID_CONTRACT.md)
 

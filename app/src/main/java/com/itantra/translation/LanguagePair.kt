@@ -27,23 +27,57 @@ data class LanguagePair(
 
 /**
  * Central catalog of OFFLINE translation language pairs the executable engine
- * genuinely supports. Only pairs with a real, licensed, loadable model are listed.
+ * genuinely supports. Pairs with a real, licensed, loadable model are DIRECT.
  *
- * The runtime engine is Helsinki-NLP Opus-MT (Apache-2.0) exported to ONNX and
- * executed via the bundled ONNX Runtime. Hindi <-> English is the first verified pair.
+ * Architecture: each of the 10 iTantra languages has a real Opus-MT model with
+ * ENGLISH (opus-mt-{x}-en and opus-mt-en-{x}). Any OTHER directed pair (X->Y)
+ * translates through ENGLISH as a pivot with exactly two offline hops:
+ *     X -> EN -> Y
+ * This makes all 10 languages mutually cross-translatable, fully offline, using
+ * only the per-language EN<->X packs. Same-language pairs are never translated.
  *
- * Do NOT add a pair here until an executable model actually exists for it.
+ * A pair is "direct" only when a real executable model exists for it. Pivoted
+ * pairs are explicitly reported as such (never silently claimed as a single
+ * direct model).
  */
 object TranslationCatalog {
 
-    /** Genuinely supported directed pairs (source,target). */
-    private val supportedPairs: Set<Pair<String, String>> = setOf(
-        "hi" to "en",
-        "en" to "hi"
-    )
+    private const val EN = "en"
 
-    fun supports(sourceCode: String, targetCode: String): Boolean =
-        sourceCode.lowercase() to targetCode.lowercase() in supportedPairs
+    /** All languages that have a real EN<->X Opus-MT model. */
+    private val pivotLangs: Set<String> = setOf("hi", "en", "gu", "mr", "kn", "ml", "ta", "te", "or", "bn")
 
-    fun supportedPairIds(): Set<String> = supportedPairs.map { "${it.first}-${it.second}" }.toSet()
+    private fun norm(code: String): String = code.lowercase()
+
+    /** True if a DIRECT model exists for this (source,target) pair. */
+    fun isDirect(sourceCode: String, targetCode: String): Boolean {
+        val s = norm(sourceCode); val t = norm(targetCode)
+        return s != t && (s == EN && t in pivotLangs || t == EN && s in pivotLangs)
+    }
+
+    /**
+     * True if translation is possible (direct OR via EN pivot). Same-language
+     * returns false (no translation needed).
+     */
+    fun supports(sourceCode: String, targetCode: String): Boolean {
+        val s = norm(sourceCode); val t = norm(targetCode)
+        if (s == t) return false
+        return isDirect(s, t) || (s in pivotLangs && t in pivotLangs)
+    }
+
+    /**
+     * The hop route: [source, ..., target].
+     * Direct => [s, t]. Non-English cross pair => [s, EN, t].
+     */
+    fun path(sourceCode: String, targetCode: String): List<String>? {
+        val s = norm(sourceCode); val t = norm(targetCode)
+        if (s == t) return null
+        return if (isDirect(s, t)) listOf(s, t) else listOf(s, EN, t)
+    }
+
+    /** IDs of ALL direct model pairs (each maps to one downloadable pack). */
+    fun supportedPairIds(): Set<String> =
+        pivotLangs.flatMap { lang ->
+            listOf("$EN-$lang", "$lang-$EN")
+        }.filter { it.split("-")[0] != it.split("-")[1] }.toSet()
 }

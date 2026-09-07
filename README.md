@@ -62,24 +62,28 @@ Key design decisions:
   ONNX deployment and executed with a small JNI adapter (`libitantra_mt.so`) that
   dlopens the ONNX Runtime **already linked by sherpa-onnx** (no second
   libonnxruntime.so, avoiding the dual-ORT conflict).
-  - Runtime architecture source: `model-conversion/adapter/` (JNI C++ + vendored
-    ORT 1.27 C API header). Build it with the NDK; the app loads it if present.
-  - Model conversion: `model-conversion/convert_opus_mt_onnx.py` → encoder/decoder
-    ONNX + SentencePiece vocab/config for `hi-en` / `en-hi`.
-  - **Honest current status:** architecture and pipeline are complete and unit
-    tested, but the real Opus-MT ONNX weights are NOT yet hosted and the native
-    adapter is NOT yet compiled/verified, so the engine reports
-    `TRANSLATION_UNAVAILABLE` until those operator steps are done. No fake
-    translation is ever emitted.
+  - Runtime source: `app/src/main/cpp/` (JNI C++ + vendored ORT 1.27 C API header
+    + vendored real SentencePiece). **Compiled and verified loading on a physical
+    ARM64 device** (nativeSelfTest → NATIVE_TEST_OK).
+  - **All 10 languages cross-translate offline via an EN-pivot**:
+    each language has a real EN↔X Opus-MT pack (18 directed packs); any X↔Y pair
+    (neither is English) runs two real hops X→EN→Y. Same-language bypasses.
+  - Model conversion: `model-conversion/convert_opus_mt_onnx.py` →
+    encoder/decoder ONNX + SentencePiece vocab/config per `{src}-{tgt}`.
+  - **Honest current status:** pipeline, native runtime (with real SentencePiece)
+    and all-language EN-pivot architecture are complete and unit-tested. The real
+    Opus-MT ONNX weights for each language pair are NOT yet converted/hosted, so
+    the engine reports `TRANSLATION_UNAVAILABLE` until those operator steps are
+    done. No fake translation is ever emitted.
 
 ## Cross-language runtime status
 
-- **Architecture:** COMPLETE (tested)
-- **Model artifact (hi-en / en-hi ONNX packs):** NOT COMPLETE (requires
+- **Architecture (all 10 languages, EN-pivot):** COMPLETE (unit-tested)
+- **Native runtime (JNI + real SentencePiece + ORT):** COMPLETE — compiled and
+  verified loading on a physical ARM64 device; tokenizer parity 6/6 vs HF
+- **Model artifacts (18 EN↔X ONNX packs):** NOT COMPLETE (requires
   `convert_opus_mt_onnx.py` run + hosting)
-- **Android runtime (JNI adapter):** NOT COMPLETE (source in
-  `model-conversion/adapter/`; requires an NDK build)
-- **Real device translation verified:** NOT VERIFIED
+- **Real device HI↔EN translation verified:** NOT VERIFIED
 
 ---
 

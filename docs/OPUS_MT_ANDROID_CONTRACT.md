@@ -1,9 +1,24 @@
 # Opus-MT Android Contract
 
-Verified against the real HuggingFace model config (Helsinki-NLP/opus-mt-hi-en
-and opus-mt-en-hi), not assumed.
+Verified against the real HuggingFace model configs (Helsinki-NLP opus-mt).
 
-## Pack layout (runtime must match)
+## Architecture: EN-pivot for all 10 languages
+
+Every iTantra language has a real Opus-MT model with ENGLISH
+(`opus-mt-{lang}-en` and `opus-mt-en-{lang}`). Any pair X→Y translates offline
+through ENGLISH with exactly two hops:
+
+```
+Tamil → "வணக்கம்" → tamil→EN → EN→Marathi → Marathi text
+```
+
+- **Direct pairs** (real model): `en↔hi`, `en↔gu`, `en↔mr`, `en↔kn`,
+  `en↔ml`, `en↔ta`, `en↔te`, `en↔or`, `en↔bn` → 18 directed model packs.
+- **Pivoted pairs** (X↔Y, neither English): two hops through EN, each hop a
+  real model. Never claimed as a single direct model.
+- Same-language: bypass (no translation).
+
+Pack layout (runtime must match)
 
 ```
 models/translation/{src}-{tgt}/

@@ -92,28 +92,54 @@ class SpeechModelManager(
     fun translationSupported(sourceCode: String, targetCode: String): Boolean =
         com.itantra.translation.TranslationCatalog.supports(sourceCode, targetCode)
 
-    /** True if the translation pack files for a pair are actually installed. */
+    /** The direct hop route for a pair (all hops are real model packs). */
+    private fun hopRoute(sourceCode: String, targetCode: String): List<String>? =
+        com.itantra.translation.TranslationCatalog.path(sourceCode, targetCode)
+
+    /** True if ALL model packs needed for this pair (direct or EN-pivot) are installed. */
     fun translationInstalled(source: com.itantra.stt.SupportedLanguage, target: com.itantra.stt.SupportedLanguage): Boolean {
-        val key = com.itantra.translation.TranslationEngine.pairId(source, target)
-        return distribution.isInstalled(key, ModelRole.TRANSLATION)
+        val route = hopRoute(source.code, target.code) ?: return false
+        return route.windowed(2, 1).all { (s, t) ->
+            val key = s + "-" + t
+            distribution.isInstalled(key, ModelRole.TRANSLATION)
+        }
     }
 
-    /** Translate offline; returns a non-success result (never throws) when unavailable. */
+    /** Translate offline — direct hop or X→EN→Y pivot. All hops use real models. */
     fun translate(
         text: String,
         sourceCode: String,
         targetCode: String
     ): com.itantra.translation.TranslationResult {
         val engine = translationEngine
-        if (engine == null || !engine.supports(sourceCode, targetCode)) {
+        val route = hopRoute(sourceCode, targetCode)
+        if (engine == null || route == null) {
             return com.itantra.translation.TranslationResult.unavailable(sourceCode, targetCode)
         }
-        return engine.translate(text, sourceCode, targetCode)
+        if (text.isBlank()) {
+            return com.itantra.translation.TranslationResult(text, sourceCode, targetCode, 0L, success = true)
+        }
+        var current = text
+        var totalLatency = 0L
+        // Pivot (X->EN->Y): a three-node route runs exactly two real hops.
+        for (i in 0 until route.size - 1) {
+            val s = route[i]; val t = route[i + 1]
+            val res = engine.translate(current, s, t)
+            if (!res.success || res.translatedText.isBlank()) {
+                return com.itantra.translation.TranslationResult.failed(
+                    sourceCode, targetCode, res.error ?: "Translation failed at hop $s->$t")
+            }
+            current = res.translatedText
+            totalLatency += res.latencyMs
+        }
+        return com.itantra.translation.TranslationResult(
+            current, sourceCode, targetCode, totalLatency, success = true)
     }
 
     /**
      * Full cross-language pipeline readiness for (source → target):
-     * source STT + (translation if source != target) + target TTS all available.
+     * source STT + (translation hop packs if source != target) + target TTS all
+     * available. For EN-pivot pairs all hops must be installed.
      */
     fun pipelineReady(
         source: com.itantra.stt.SupportedLanguage,
@@ -121,9 +147,6 @@ class SpeechModelManager(
     ): Boolean {
         if (!sttAvailable(source.code)) return false
         if (source != target) {
-            val pair = ModelCatalog.translationPack(source, target) ?: return false
-            // Honest readiness: the translation engine must genuinely support the pair
-            // AND the pack must be installed (files present).
             if (!translationSupported(source.code, target.code)) return false
             if (!translationInstalled(source, target)) return false
         }
@@ -136,11 +159,20 @@ class SpeechModelManager(
         target: com.itantra.stt.SupportedLanguage
     ): List<LanguageModelPack> {
         val missing = mutableListOf<LanguageModelPack>()
-        // STT: bundled Whisper is always available (asset present) — not "missing".
         if (source != target) {
-            val pair = ModelCatalog.translationPack(source, target)
-            if (pair != null && !translationInstalled(source, target) && pair.downloadUrl != null) {
-                missing.add(pair)
+            // Each hop of the route (direct, or X->EN->Y) is an independent pack.
+            val route = hopRoute(source.code, target.code)
+            if (route != null) {
+                for (i in 0 until route.size - 1) {
+                    val s = route[i]; val t = route[i + 1]
+                    val key = s + "-" + t
+                    if (!distribution.isInstalled(key, ModelRole.TRANSLATION)) {
+                        ModelCatalog.translationPack(
+                            com.itantra.stt.SupportedLanguage.fromCode(s),
+                            com.itantra.stt.SupportedLanguage.fromCode(t)
+                        )?.takeIf { it.downloadUrl != null }?.let { missing.add(it) }
+                    }
+                }
             }
         }
         if (!ttsAvailable(target.code)) {
