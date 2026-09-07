@@ -141,11 +141,12 @@ class ModelDistributionManager(
                 setStatus(pack.id, PackStatus.VERIFYING)
                 verifyIntegrity(pack, tmpFile)
 
-                // Extract archives (sherpa-onnx tts voices: model.onnx + tokens.txt).
+                // Extract archives (sherpa-onnx tts voices: model.onnx + tokens.txt,
+                // or translation packs with full nested directories).
                 val finalFile: File
                 if (pack.isArchive) {
-                    extractArchiveInto(stagingDir, tmpFile, onProgress)
-                    finalFile = File(stagingDir, "tokens.txt")
+                    extractArchiveInto(stagingDir, tmpFile, onProgress, pack.role)
+                    finalFile = if (pack.role == ModelRole.TRANSLATION) File(stagingDir, "config.json") else File(stagingDir, "tokens.txt")
                 } else {
                     // Atomic move into place for plain single-file models.
                     val f = File(stagingDir, "model.onnx")
@@ -283,8 +284,9 @@ class ModelDistributionManager(
      * Gzip archives decompress ~10-20x faster than bzip2 on device — MMS-style big
      * voices (100+ MB) MUST ship as .tar.gz to keep install latency acceptable.
      */
-    private fun extractArchiveInto(targetDir: File, archive: File, onProgress: (Float) -> Unit) {
-        val tmpExtract = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
+    private fun extractArchiveInto(targetDir: File, archive: File, onProgress: (Float) -> Unit, packRole: ModelRole = ModelRole.TTS) {
+        // TRANSLATION packs preserve the full nested tree (models/, tokenizer/,
+        // config.json) with the leading {pair}/ segment stripped.
         val archiveName = archive.name.lowercase()
         // Sniff decompressor: .tar.gz / .tgz → gzip (fast), else bzip2 (legacy Piper packs).
         var isGzip = archiveName.endsWith(".tar.gz") || archiveName.endsWith(".tgz")
@@ -299,15 +301,12 @@ class ModelDistributionManager(
         }
         val totalBytes = archive.length().coerceAtLeast(1L)
         val bz2 = if (isGzip) {
-            org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(
-                archive.inputStream()
-            )
+            org.apache.commons.compress.compressors.gzip.GzipCompressorInputStream(archive.inputStream())
         } else {
-            org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream(
-                archive.inputStream()
-            )
+            org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream(archive.inputStream())
         }
         val tar = org.apache.commons.compress.archivers.tar.TarArchiveInputStream(bz2)
+        val tmpExtract = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
         try {
             var entry: org.apache.commons.compress.archivers.tar.TarArchiveEntry?
             var onnxFound = false
@@ -321,20 +320,28 @@ class ModelDistributionManager(
                 val path = e.name
                 val base = path.substringAfterLast('/')
                 if (e.isDirectory) continue
-                // Keep every .onnx (Whisper: encoder+decoder) + tokens.txt + espeak-ng-data.
-                val isOnnx = base.endsWith(".onnx") && e.isFile
-                val isTokens = base.equals("tokens.txt", ignoreCase = true) && e.isFile
-                val isEspeak = path.contains("espeak-ng-data") && e.isFile
-                if (!isOnnx && !isTokens && !isEspeak) continue
-                val dest: File = when {
-                    isOnnx -> File(tmpExtract, base)
-                    isTokens -> File(tmpExtract, "tokens.txt")
-                    else -> {
-                        val idx = path.indexOf("espeak-ng-data")
-                        val sub = if (idx >= 0) path.substring(idx) else base
-                        File(tmpExtract, sub)
+
+                val destRel: String
+                if (packRole == ModelRole.TRANSLATION) {
+                    // Keep the whole tree, minus the leading {pair}/ directory.
+                    destRel = path.split('/').drop(1).joinToString("/")
+                    if (destRel.isBlank()) continue
+                    if (base.endsWith(".onnx")) onnxFound = true
+                    if (base.equals("config.json", true)) tokensFound = true // config as the required file
+                } else {
+                    val isOnnx = base.endsWith(".onnx") && e.isFile
+                    val isTokens = base.equals("tokens.txt", ignoreCase = true) && e.isFile
+                    val isEspeak = path.contains("espeak-ng-data") && e.isFile
+                    if (!isOnnx && !isTokens && !isEspeak) continue
+                    destRel = when {
+                        isOnnx -> base
+                        isTokens -> "tokens.txt"
+                        else -> path.substring(path.indexOf("espeak-ng-data"))
                     }
+                    if (isOnnx) onnxFound = true else if (isTokens) tokensFound = true else espeakFound = true
                 }
+
+                val dest = File(tmpExtract, destRel)
                 dest.parentFile?.mkdirs()
                 var written = 0L
                 dest.outputStream().use { out ->
@@ -343,8 +350,6 @@ class ModelDistributionManager(
                         out.write(buf, 0, n)
                         written += n
                         bytesConsumed += n
-                        // Real extract progress = decompressed bytes / compressed file size
-                        // (a compressed MB still reads ~1 compressed MB of the download).
                         val p = (bytesConsumed.toDouble() / totalBytes).toFloat()
                         val idx = (p * 100).toInt()
                         if (idx != lastProgress) {
@@ -353,44 +358,60 @@ class ModelDistributionManager(
                         }
                     }
                 }
-                if (isOnnx) {
-                    if (e.size > 0 && written < e.size) {
-                        throw IOException("Truncated $base ($written/${e.size} bytes)")
-                    }
-                    onnxFound = true
-                } else if (isTokens) {
-                    tokensFound = true
-                } else if (isEspeak) {
-                    espeakFound = true
+                if (written > 0 && e.size > 0 && written < e.size) {
+                    throw IOException("Truncated $base ($written/${e.size} bytes)")
                 }
             }
-            if (!onnxFound || !tokensFound) {
+            // Required-file validation (role-appropriate).
+            if (packRole == ModelRole.TRANSLATION) {
+                val hasEnc = File(tmpExtract, "models/encoder_model.onnx").exists()
+                val hasDec = File(tmpExtract, "models/decoder_model.onnx").exists()
+                val hasCfg = File(tmpExtract, "config.json").exists()
+                if (!hasEnc || !hasDec || !hasCfg) {
+                    throw IOException("Translation archive incomplete: encoder/decoder/config missing")
+                }
+                onnxFound = true; tokensFound = true
+            } else if (!onnxFound || !tokensFound) {
                 throw IOException("Archive missing model(*.onnx)/tokens.txt for ${archive.name}")
             }
-            writeEspeakMarker(targetDir, espeakFound)
+            if (packRole != ModelRole.TRANSLATION) writeEspeakMarker(targetDir, espeakFound)
             onProgress(0.95f)
         } finally {
             tar.close()
         }
-        // Atomically publish every extracted file into the live pack dir.
-        File(tmpExtract, "tokens.txt").copyTo(File(targetDir, "tokens.txt"), overwrite = true)
-        File(tmpExtract, "tokens.txt").delete()
-        tmpExtract.listFiles { f -> f.isFile && f.name.endsWith(".onnx") }?.forEach { onnx ->
-            onnx.copyTo(File(targetDir, onnx.name), overwrite = true)
-            onnx.delete()
-        }
-        // espeak-ng-data is REQUIRED by Piper voices (dataDir) — move it recursively.
-        val espeakSrc = File(tmpExtract, "espeak-ng-data")
-        if (espeakSrc.exists()) {
-            val espeakDst = File(targetDir, "espeak-ng-data")
-            espeakSrc.walkTopDown().forEach { srcFile ->
-                val rel = srcFile.relativeTo(espeakSrc)
-                val dst = File(espeakDst, rel.path)
-                if (srcFile.isDirectory) dst.mkdirs() else srcFile.copyTo(dst, overwrite = true)
+        // Atomically publish EVERY extracted file (nested for translation; the
+        // original TTS/Whisper flat layout is preserved by destRel above).
+        if (packRole == ModelRole.TRANSLATION) {
+            publishTree(tmpExtract, targetDir)
+        } else {
+            File(tmpExtract, "tokens.txt").copyTo(File(targetDir, "tokens.txt"), overwrite = true)
+            File(tmpExtract, "tokens.txt").delete()
+            tmpExtract.listFiles { f -> f.isFile && f.name.endsWith(".onnx") }?.forEach { onnx ->
+                onnx.copyTo(File(targetDir, onnx.name), overwrite = true)
+                onnx.delete()
             }
-            espeakSrc.deleteRecursively()
+            val espeakSrc = File(tmpExtract, "espeak-ng-data")
+            if (espeakSrc.exists()) {
+                val espeakDst = File(targetDir, "espeak-ng-data")
+                espeakSrc.walkTopDown().forEach { srcFile ->
+                    val rel = srcFile.relativeTo(espeakSrc)
+                    val dst = File(espeakDst, rel.path)
+                    if (srcFile.isDirectory) dst.mkdirs() else srcFile.copyTo(dst, overwrite = true)
+                }
+                espeakSrc.deleteRecursively()
+            }
+            tmpExtract.deleteRecursively()
         }
-        tmpExtract.deleteRecursively()
+    }
+
+    /** Recursively move a staging tree into the live dir (translation packs). */
+    private fun publishTree(src: File, dst: File) {
+        src.walkTopDown().forEach { f ->
+            val rel = f.relativeTo(src)
+            val target = File(dst, rel.path)
+            if (f.isDirectory) target.mkdirs() else { target.parentFile?.mkdirs(); f.copyTo(target, overwrite = true) }
+        }
+        src.deleteRecursively()
     }
 
     /** Record that the voice pack contains espeak-ng-data (Piper-required). */

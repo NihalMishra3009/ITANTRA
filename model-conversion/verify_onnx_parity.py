@@ -76,6 +76,7 @@ def main():
 
     from transformers import MarianTokenizer, MarianMTModel
     import onnxruntime as ort
+    import torch
 
     all_pass = True
     for pack in args.pack:
@@ -106,10 +107,27 @@ def main():
 
         for sent in SENTENCES:
             ids = tok(sent, return_tensors="pt")["input_ids"][0].tolist()
-            ref = tok.decode(
-                model.generate(**tok(sent, return_tensors="pt"), max_new_tokens=64)[0],
-                skip_special_tokens=True,
-            )
+            # HF reference: MANUAL greedy over the HF model (identical to the ONNX
+            # greedy decoder), NOT model.generate — HF generate applies extra
+            # logits processing (bad_words_ids / max_length) that the on-device
+            # greedy decoder does not.
+            trig = tok(sent, return_tensors="pt")
+            with torch.no_grad():
+                hf_eh = model.model.encoder(input_ids=trig["input_ids"])[0]
+            hf_dec = [int(model.config.decoder_start_token_id)]
+            while True:
+                out = model.model.decoder(
+                    input_ids=torch.tensor([hf_dec]), encoder_hidden_states=hf_eh)
+                log = model.lm_head(out[0])  # [1,T,V]
+                nxt = int(log[0, -1].argmax())
+                if nxt == model.config.eos_token_id or nxt == model.config.pad_token_id:
+                    break
+                hf_dec.append(nxt)
+                if len(hf_dec) > 64:
+                    break
+            ref = tok.decode(hf_dec, skip_special_tokens=True)
+            import torch as _torch
+            hf_eh = hf_eh  # keep alive
             gen_ids = greedy_onnx(enc, dec, ids, decoder_start, eos_id, pad_id, vocab_size)
             onnx_text = tok.decode(gen_ids, skip_special_tokens=True) if gen_ids else ""
             same = ref.strip() == onnx_text.strip()

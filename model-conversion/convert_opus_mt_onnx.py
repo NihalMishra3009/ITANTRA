@@ -86,9 +86,27 @@ def main():
         }, f, indent=2)
 
     # ---- Dump the real SentencePiece model + vocab (IDs preserved) ----
-    sp = tok.sp_model
+    # Version-robust: transformers 5.x renamed tok.sp_model; the .spm bytes are
+    # available via tok.spm_source / spm_target (loaded SentencePieceProcessor),
+    # or just copied from the model repo on disk when --model is a local dir.
+    sp_bytes = None
+    for attr in ("spm_source", "spm_target", "current_spm"):
+        obj = getattr(tok, attr, None)
+        if obj is not None:
+            try:
+                sp_bytes = obj.serialized_model_proto()
+                break
+            except Exception:
+                sp_bytes = None
+    if sp_bytes is None:
+        # local-dir fallback: source.spm already downloaded next to the weights
+        cand = os.path.join(args.model, "source.spm")
+        if os.path.exists(cand):
+            sp_bytes = open(cand, "rb").read()
+    if sp_bytes is None:
+        raise SystemExit("Could not obtain the SentencePiece model bytes (tok API + local source.spm both missing)")
     with open(os.path.join(out_dir, "tokenizer", "sentencepiece.model"), "wb") as f:
-        f.write(sp.serialized_model_proto())
+        f.write(sp_bytes)
     vocab = tok.get_vocab()
     ordered = sorted(vocab.items(), key=lambda kv: kv[1])
     with open(os.path.join(out_dir, "tokenizer", "sp.vocab"), "w", encoding="utf-8") as f:

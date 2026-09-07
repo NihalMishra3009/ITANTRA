@@ -303,27 +303,43 @@ object ModelCatalog {
             com.itantra.stt.SupportedLanguage.fromCode(s) to com.itantra.stt.SupportedLanguage.fromCode(t)
         }
 
+    /** Release base for verified Opus-MT translation packs. */
+    private const val MT_RELEASE_BASE =
+        "https://github.com/NihalMishra3009/ITANTRA/releases/download/mt-onnx"
+
+    /** Verified pack metadata for the two currently hosted directions. */
+    private val hostedMtPacks = mapOf(
+        "hi-en" to Triple(513_509_018L, "43a38aa6766d08c5e8cd834cf398505e9994536ebb4c74d1ab2eb167fe5ee0d0", "opus-mt-hi-en"),
+        "en-hi" to Triple(518_143_817L, "639decd98c1f558b9bd51712cbda1facb830da3537891f369bc32d786ab455e2", "opus-mt-en-hi")
+    )
+
     /** Offline neural translation model packs (role TRANSLATION). */
     fun translationPacks(): List<LanguageModelPack> =
         translationPairs.map { (src, tgt) ->
+            val key = "${src.code}-${tgt.code}"
+            val hosted = hostedMtPacks[key]
             LanguageModelPack(
                 id = "mt_${src.code}_${tgt.code}",
                 language = src,
                 role = ModelRole.TRANSLATION,
                 modelName = "Opus-MT ${src.displayName}→${tgt.displayName} (ONNX)",
                 version = "opus-mt-2024",
-                sizeBytes = 0L, // operator-provided model size; not fabricated
-                checksumSha256 = "", // pinned once the converted artifact is hosted+verified
+                sizeBytes = hosted?.first ?: 0L, // real measured size, or 0 when not hosted
+                checksumSha256 = hosted?.second ?: "", // real SHA-256, or empty when not hosted
                 license = "Apache-2.0 (Helsinki-NLP Opus-MT; conversion via Marian + SentencePiece)",
                 runtime = Mlruntime.ONNX_MT,
                 quantization = Quantization.FP32,
                 sampleRate = 0,
                 supportedDeviceClass = DeviceClass.MID,
-                downloadUrl = null, // no hosted converted artifact yet — honest
-                isArchive = false,
+                downloadUrl = hosted?.let { "$MT_RELEASE_BASE/opm-$key.tar.gz" }, // null when not hosted
+                isArchive = true,
                 isMultilingualShared = false,
                 supportsLanguage = true,
-                notes = "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires encoder_model.onnx + decoder_model.onnx + config.json + tokenizer/ under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet.",
+                notes = if (hosted != null) {
+                    "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0), verified ONNX-vs-HF parity. Download → SHA-256 verified → fully offline after install."
+                } else {
+                    "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires encoder_model.onnx + decoder_model.onnx + config.json + tokenizer/ under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet."
+                },
                 isEngine = false,
                 targetLanguage = tgt
             )
