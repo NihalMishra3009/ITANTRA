@@ -9,19 +9,26 @@ import java.net.URL
 
 /**
  * Downloads, verifies, and atomically installs language model packs into app-private
- * storage. The ONLY online steps are optional user-initiated acquisition/update; after
- * install, inference runs fully offline from cached files.
+ * storage from a staging directory. The ONLY online steps are optional user-initiated
+ * acquisition/update; after install, inference runs fully offline from cached files.
  *
  * Pipeline:
- *   DOWNLOAD -> TEMP FILE -> VERIFY SHA-256 -> VERIFY METADATA -> ATOMIC MOVE
- *   -> REGISTER INSTALLED
+ *   DOWNLOAD (fresh) -> TEMP FILE -> VERIFY SHA-256 -> REQUIRED-FILE VALIDATION
+ *   -> ATOMIC PUBLISH (rename .staging -> live dir) -> REGISTER INSTALLED
  *
  * Guarantees:
- *  - never overwrites the active (installed) model mid-download (writes into .tmp)
- *  - resumable where the server supports Range (kept minimal)
- *  - cancellable and retryable
+ *  - never overwrites the active (installed) model mid-download — a full download
+ *    writes into .staging/.../.tmp, is verified, then the validated staging directory
+ *    is renamed over the live pack in one step
+ *  - cancellable and retryable (a retry re-downloads from scratch)
  *  - corrupted downloads detected by size + SHA-256 mismatch -> never installed
+ *  - a failed download never destroys an already-installed valid model (staging is
+ *    discarded; the live dir is only replaced after validation succeeds)
  *  - individual STT / TTS packs install/delete independently
+ *
+ * NOTE: downloads are NOT resumable. A cancelled/failed download restarts from
+ * byte zero on retry. This is stated honestly rather than claiming HTTP Range
+ * support that isn't implemented.
  */
 class ModelDistributionManager(
     context: Context
@@ -47,7 +54,11 @@ class ModelDistributionManager(
             if (it in setOf(PackStatus.DOWNLOADING, PackStatus.VERIFYING, PackStatus.LOADING)) return it
         }
         return if (pack.isEngine) {
-            if (engineDir(pack).exists()) PackStatus.INSTALLED else PackStatus.NOT_INSTALLED
+            val dir = engineDir(pack)
+            // Engine pack: valid only when required files are actually present.
+            if (File(dir, "tokens.txt").exists() && dir.listFiles { f ->
+                    f.isFile && f.name.endsWith(".onnx", ignoreCase = true)
+                }?.isNotEmpty() == true) PackStatus.INSTALLED else PackStatus.NOT_INSTALLED
         } else if (storage.isInstalled(pack.role, pack.language.code)) PackStatus.INSTALLED
         else PackStatus.NOT_INSTALLED
     }
@@ -89,9 +100,12 @@ class ModelDistributionManager(
             return
         }
         val lang = pack.language.code.lowercase()
-        val targetDir = if (pack.isEngine) engineDir(pack).apply { mkdirs() }
-        else storage.roleDir(pack.role, lang).apply { mkdirs() }
-        val tmpDir = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
+        // Both language and engine packs stage into .staging/... and only publish
+        // into the live dir after validation (never expose a partial model).
+        val stagingDir = if (pack.isEngine) File(storage.modelsDir, ModelStorageManager.STAGING_DIR + "/engine/" + pack.id)
+        else storage.stagingDir(pack.role, lang)
+        stagingDir.apply { mkdirs() }
+        val tmpDir = File(stagingDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
         val tmpFile = File(tmpDir, "model.part")
 
         setStatus(pack.id, PackStatus.DOWNLOADING)
@@ -130,11 +144,11 @@ class ModelDistributionManager(
                 // Extract archives (sherpa-onnx tts voices: model.onnx + tokens.txt).
                 val finalFile: File
                 if (pack.isArchive) {
-                    extractArchiveInto(targetDir, tmpFile, onProgress)
-                    finalFile = File(targetDir, "tokens.txt")
+                    extractArchiveInto(stagingDir, tmpFile, onProgress)
+                    finalFile = File(stagingDir, "tokens.txt")
                 } else {
                     // Atomic move into place for plain single-file models.
-                    val f = File(targetDir, "model.onnx")
+                    val f = File(stagingDir, "model.onnx")
                     if (f.exists()) f.delete()
                     if (!tmpFile.renameTo(f)) {
                         tmpFile.copyTo(f, overwrite = true)
@@ -142,8 +156,27 @@ class ModelDistributionManager(
                     }
                     finalFile = f
                 }
+
+                // REQUIRED-file validation BEFORE publish: never expose a partial
+                // pack as installed.
                 if (pack.isEngine) {
-                    writeEngineMetadata(pack, lang, targetDir)
+                    // Engine pack: tokens + at least one .onnx required.
+                    val hasTokens = File(stagingDir, "tokens.txt").exists()
+                    val hasOnnx = stagingDir.listFiles { f ->
+                        f.isFile && f.name.endsWith(".onnx", ignoreCase = true)
+                    }?.isNotEmpty() == true
+                    if (!hasTokens || !hasOnnx) {
+                        throw IOException("Engine pack incomplete: missing tokens.txt/onnx")
+                    }
+                } else if (!storage.isCompletePack(stagingDir, pack.role)) {
+                    throw IOException("Pack incomplete: missing required model/tokens files")
+                }
+
+                // Publish stage -> live pack dir atomically (same filesystem).
+                publish(stagingDir, if (pack.isEngine) engineDir(pack) else storage.roleDir(pack.role, lang))
+
+                if (pack.isEngine) {
+                    writeEngineMetadata(pack, lang, engineDir(pack))
                 } else {
                     storage.writeInstalledMetadata(pack.role, lang, pack.version, pack.checksumSha256)
                 }
@@ -153,12 +186,12 @@ class ModelDistributionManager(
                 onDone(Result.success(finalFile))
             } catch (e: CancelledException) {
                 Log.w(TAG, "Download of ${pack.id} cancelled")
-                cntryCleanup(tmpDir, tmpFile)
+                cntryCleanup(tmpDir, tmpFile, stagingDir)
                 setStatus(pack.id, PackStatus.NOT_INSTALLED)
                 onDone(Result.failure(e))
             } catch (e: Exception) {
                 Log.e(TAG, "Download of ${pack.id} failed: ${e.message}")
-                cntryCleanup(tmpDir, tmpFile)
+                cntryCleanup(tmpDir, tmpFile, stagingDir)
                 setStatus(pack.id,
                     if (e is ChecksumMismatchException) PackStatus.CORRUPTED else PackStatus.FAILED)
                 onDone(Result.failure(e))
@@ -168,9 +201,43 @@ class ModelDistributionManager(
         }.start()
     }
 
-    private fun cntryCleanup(tmpDir: File, tmpFile: File) {
-        // Keep temp dir on failure so a retry can resume; only delete the partial file.
+    /**
+     * Atomically publish a validated staging dir into the live pack dir. On same
+     * filesystem this is a rename; the previous (working) install is replaced only
+     * after the new content is fully in place, so an interrupted/ failed install
+     * never exposes a partial model.
+     */
+    private fun publish(stagingDir: File, liveDir: File) {
+        if (!stagingDir.exists()) throw IOException("Staging dir missing for publish")
+        // Preserve the current installation until replacement is ready.
+        val backup = File(liveDir.parentFile, liveDir.name + ".old")
+        try {
+            if (liveDir.exists() && backup.exists()) backup.deleteRecursively()
+            if (liveDir.exists()) liveDir.renameTo(backup)
+            if (!stagingDir.renameTo(liveDir)) {
+                // Cross-filesystem fallback (shouldn't happen — both under filesDir).
+                liveDir.mkdirs()
+                stagingDir.copyRecursively(liveDir, overwrite = true)
+                stagingDir.deleteRecursively()
+                backup.deleteRecursively()
+            } else {
+                backup.deleteRecursively()
+            }
+        } catch (e: Exception) {
+            // Roll back: restore the previous working install if publish failed.
+            try {
+                if (!liveDir.exists() && backup.exists()) backup.renameTo(liveDir)
+            } catch (_: Exception) {}
+            throw e
+        }
+    }
+
+    private fun cntryCleanup(tmpDir: File, tmpFile: File, stagingDir: File) {
+        // Keep staging on failure so a retry can resume; only delete the partial file.
         try { tmpFile.delete() } catch (_: Exception) {}
+        if (!stagingDir.listFiles { f -> f.name != ModelStorageManager.TMP_DIR }?.any()!!) {
+            try { stagingDir.deleteRecursively() } catch (_: Exception) {}
+        }
     }
 
     private fun openDownload(url: String): HttpURLConnection {
@@ -347,6 +414,11 @@ class ModelDistributionManager(
     fun deletePack(pack: LanguageModelPack): Boolean {
         val ok = if (pack.isEngine) engineDir(pack).deleteRecursively()
         else storage.deletePack(pack.role, pack.language.code)
+        // Also discard any stale staging for this pack.
+        val lang = pack.language.code.lowercase()
+        val stage = if (pack.isEngine) File(storage.modelsDir, ModelStorageManager.STAGING_DIR + "/engine/" + pack.id)
+        else storage.stagingDir(pack.role, lang)
+        try { if (stage.exists()) stage.deleteRecursively() } catch (_: Exception) {}
         statuses.remove(pack.id)
         return ok
     }

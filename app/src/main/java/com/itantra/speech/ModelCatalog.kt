@@ -79,7 +79,7 @@ object ModelCatalog {
      *  IndicF5 requires ONNX conversion; not offered until a converted artifact exists. */
     private fun ttsPack(lang: SupportedLanguage): LanguageModelPack {
         val supported = lang.code in indicF5Langs
-        // Real, verified, loadable Piper/Coqui/Mimic3 TTS voices (un-gated, MIT).
+        // Real, verified, loadable Piper/Coqui/Mimic3 TTS voices.
         val realVoice = realVoices[lang.code]
         if (realVoice != null) {
             return LanguageModelPack(
@@ -99,7 +99,9 @@ object ModelCatalog {
                 isArchive = true,
                 isMultilingualShared = false,
                 supportsLanguage = true,
-                notes = "Genuine downloadable voice (verified SHA-256). Download → install → fully offline TTS."
+                notes = if (realVoice.restrictedLicense)
+                    "Genuine downloadable voice (verified SHA-256). License ${realVoice.license} — NON-COMMERCIAL (not open-source-approved), offline after install."
+                else "Genuine downloadable voice (verified SHA-256). License ${realVoice.license} (open source). Download → install → fully offline TTS."
             )
         }
         // Meta MMS-TTS converted voice (hosted tar.bz2) — covers the 5 Indic languages
@@ -149,7 +151,8 @@ object ModelCatalog {
             "Mimic3 gu_IN-cmu-indic (low)", 76330321,
             "ed6849f311bac71cc9f76b33d32412671ca201ea4b3b575f7b28d67e26eac6ae",
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mimic3-gu_IN-cmu-indic_low.tar.bz2",
-            "CC-BY-NC 4.0"
+            "CC-BY-NC 4.0",
+            restrictedLicense = true
         ),
         "bn" to RealVoice(
             "Coqui bn-custom-female", 103_000_000,
@@ -170,7 +173,9 @@ object ModelCatalog {
         val sizeBytes: Long,
         val sha256: String,
         val url: String,
-        val license: String
+        val license: String,
+        /** true when the license has a non-commercial clause (NOT open-source-approved). */
+        val restrictedLicense: Boolean = false
     )
 
     // Checks whether a self-contained converted artifact is bundled in the APK.
@@ -259,7 +264,6 @@ object ModelCatalog {
         val lang = com.itantra.stt.SupportedLanguage.fromCode(code)
         val sha = mmsSha[code] ?: ""
         val sz = mmsSize[code] ?: 0L
-        val convertedAvailable = convertedArtifactExists("models/tts/mms_${code}/model.onnx")
         return LanguageModelPack(
             id = "tts_mms_${code}",
             language = lang,
@@ -277,9 +281,7 @@ object ModelCatalog {
             isArchive = true,
             isMultilingualShared = false,
             supportsLanguage = true,
-            notes = if (convertedAvailable)
-                "Meta MMS-TTS converted to sherpa VITS ONNX — bundled, offline, loadable."
-            else "Meta MMS-TTS (covers ${lang.displayName}) — downloaded from iTantra release, SHA-256 verified, fully offline after install.",
+            notes = "Meta MMS-TTS (covers ${lang.displayName}) — converted to sherpa VITS ONNX. License CC-BY-NC 4.0 — NON-COMMERCIAL (not open-source-approved); hosted on iTantra release, SHA-256 verified, fully offline after install.",
             isEngine = false
         )
     }

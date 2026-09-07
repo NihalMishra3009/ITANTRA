@@ -22,6 +22,15 @@ class ModelStorageManager(private val context: Context) {
         /** Directory when a model is mid-download/verify (atomic, not visible as installed). */
         const val TMP_DIR = ".tmp"
 
+        /** Staging root for atomic installs — never visible as an installed pack. */
+        const val STAGING_DIR = ".staging"
+
+        /** Required artifact inside a TTS pack. */
+        const val TTS_MODEL_FILE = "model.onnx"
+
+        /** Required artifact inside a TTS pack. */
+        const val TTS_TOKENS_FILE = "tokens.txt"
+
         /** Version file inside an installed pack directory. */
         const val VERSION_FILE = "version.txt"
 
@@ -38,11 +47,27 @@ class ModelStorageManager(private val context: Context) {
 
     fun tmpDir(role: ModelRole, lang: String): File = File(roleDir(role, lang), TMP_DIR)
 
-    /** True if the pack directory exists and contains at least one real model file. */
-    fun isInstalled(role: ModelRole, lang: String): Boolean {
-        val dir = roleDir(role, lang)
-        return dir.exists() && (dir.listFiles { f -> f.isFile && f.name != TMP_DIR && f.name != VERSION_FILE && f.name != CHECKSUM_FILE }?.isNotEmpty() ?: false)
+    /** Staging directory for an in-flight install (never visible as installed). */
+    fun stagingDir(role: ModelRole, lang: String): File =
+        File(File(modelsDir, STAGING_DIR), "${if (role == ModelRole.STT) "stt" else "tts"}/${lang.lowercase()}")
+
+    /**
+     * True iff this staged/installed pack passes REQUIRED-file validation for its
+     * role. A TTS voice needs model.onnx + tokens.txt; an STT engine needs at least
+     * one .onnx + tokens.txt. Never reports partial/missing packs as installed.
+     */
+    fun isCompletePack(dir: File, role: ModelRole): Boolean {
+        if (!dir.isDirectory) return false
+        val files = dir.listFiles { f -> f.isFile }?.toList() ?: return false
+        if (files.isEmpty()) return false
+        val hasTokens = files.any { it.name == TTS_TOKENS_FILE || it.name.equals("tokens.txt", true) }
+        val hasOnnx = files.any { it.name.endsWith(".onnx", ignoreCase = true) }
+        return hasTokens && hasOnnx
     }
+
+    /** True if the pack directory exists AND contains the required model files. */
+    fun isInstalled(role: ModelRole, lang: String): Boolean =
+        isCompletePack(roleDir(role, lang), role)
 
     /** All real model files in an installed pack. */
     fun modelFiles(role: ModelRole, lang: String): List<File> {
@@ -112,9 +137,11 @@ class ModelStorageManager(private val context: Context) {
         return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
-    /** Clean any leftover temp dirs (crashed/download cancelled). */
+    /** Clean any leftover temp/staging dirs (crashed/download cancelled). */
     fun purgeTempDirs() {
         File(modelsDir, "stt").listFiles()?.forEach { dir -> File(dir, TMP_DIR).deleteRecursively() }
         File(modelsDir, "tts").listFiles()?.forEach { dir -> File(dir, TMP_DIR).deleteRecursively() }
+        // Staging is never installed state — safe to discard on startup.
+        File(modelsDir, STAGING_DIR).deleteRecursively()
     }
 }

@@ -178,6 +178,17 @@ class LanguageModelsActivity : AppCompatActivity() {
         badges.addView(roleBadge("STT", sttWorking, "✓", R.color.comm_green))
         badges.addView(spacer(dp(18)))
         badges.addView(roleBadge("TTS", ttsStatus, tts))
+        // License honesty: a non-commercial license is shown explicitly — it is NOT
+        // presented as an approved open-source model.
+        if (tts.notes.contains("NON-COMMERCIAL", ignoreCase = true)) {
+            badges.addView(spacer(dp(12)))
+            badges.addView(TextView(this).apply {
+                text = "⚠ ${tts.license}"
+                setTextColor(getColor(R.color.comm_amber))
+                textSize = 10f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+        }
         card.addView(badges)
 
         val progress = TextView(this).apply {
