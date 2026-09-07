@@ -107,17 +107,21 @@ def main():
             return self.m(input_ids=input_ids)[0]  # last_hidden_state
 
     class DecoderLMWrapper(torch.nn.Module):
+        # lm_head belongs to the EncoderDecoderModel, not the decoder submodule.
         def __init__(self, m):
             super().__init__()
             self.dec = m.get_decoder()
             self.lm = m.lm_head
         def forward(self, input_ids, encoder_hidden_states):
-            d = self.dec(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states)
-            h = d.last_hidden_state
+            h = self.dec(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states)[0]
             return self.lm(h)
 
-    S = 12
-    sample_ids = torch.tensor([[bos_id] * S], dtype=torch.long)
+    # Use REAL tokenizer ids for the trace (HF adds no BOS/EOS for a single
+    # sample) — the exporter must see a faithful distribution, not [bos]*S.
+    trace_text = {"hi": "आप कहाँ जा रहे हैं?", "en": "Where are you going?"}[src]
+    trace_ids = tok(trace_text, return_tensors="pt")["input_ids"]  # [1,S]
+    S = trace_ids.shape[1]
+    sample_ids = trace_ids
     sample_enc = torch.randn(1, S, model.config.d_model, dtype=torch.float32)
 
     enc_path = os.path.join(out_dir, "models", "encoder_model.onnx")

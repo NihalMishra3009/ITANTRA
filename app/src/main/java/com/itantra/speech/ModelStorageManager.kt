@@ -37,7 +37,19 @@ class ModelStorageManager(private val context: Context) {
      * role. A TTS voice needs model.onnx + tokens.txt; an STT engine needs at least
      * one .onnx + tokens.txt. Never reports partial/missing packs as installed.
      */
-    fun isCompletePack(dir: File, role: ModelRole): Boolean = Companion.isCompletePackFiles(dir)
+    fun isCompletePack(dir: File, role: ModelRole): Boolean =
+        if (role == ModelRole.TRANSLATION) isCompleteTranslationPack(dir)
+        else Companion.isCompletePackFiles(dir)
+
+    /** Translation packs need encoder + decoder ONNX + config + SP model/vocab. */
+    private fun isCompleteTranslationPack(dir: File): Boolean {
+        if (!dir.isDirectory) return false
+        val hasEnc = File(dir, "encoder_model.onnx").exists()
+        val hasDec = File(dir, "decoder_model.onnx").exists()
+        val hasCfg = File(dir, "config.json").exists()
+        val hasTok = File(File(dir, "tokenizer"), "sentencepiece.model").exists()
+        return hasEnc && hasDec && hasCfg && hasTok
+    }
 
     companion object {
         private const val MODELS_DIR = "models"

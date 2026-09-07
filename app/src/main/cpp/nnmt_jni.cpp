@@ -41,9 +41,11 @@
 #include <cstring>
 #include <chrono>
 #include <mutex>
+#include <memory>
 #include <dlfcn.h>
 #include <android/log.h>
 #include "core/session/onnxruntime_c_api.h"
+#include "sentencepiece_processor.h"   // vendored third_party/sentencepiece
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "itantra_mt", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "itantra_mt", __VA_ARGS__)
@@ -51,10 +53,12 @@
 namespace {
 
 const OrtApi* g_ort = nullptr;
-std::mutex g_mtx;  // serializes load + translate
+std::mutex g_mtx;          // one lock: serialize load + translate + release
+std::once_flag g_ortOnce;  // ORT init runs exactly once, guarded by call_once
 
-bool loadOrtApi() {
-    std::lock_guard<std::mutex> lk(g_mtx);
+// Must be called with g_mtx NOT held (or within a single locked context that
+// already did the once-guard). See g_mtx usage in the JNI entry points.
+bool loadOrtApiLocked() {
     if (g_ort) return true;
     void* h = dlopen("libonnxruntime.so", RTLD_NOW | RTLD_GLOBAL);
     if (!h) h = dlopen("libonnxruntime.so", RTLD_NOW);
@@ -65,6 +69,12 @@ bool loadOrtApi() {
     if (!g_ort) { LOGE("GetApi(%d) returned null", ORT_API_VERSION); return false; }
     LOGI("ONNX Runtime C API loaded (ver %s)", base_fn()->GetVersionString());
     return true;
+}
+
+// Callers hold g_mtx; ORT is initialized at most once.
+bool ensureOrtApiLocked() {
+    std::call_once(g_ortOnce, []() { loadOrtApiLocked(); });
+    return g_ort != nullptr;
 }
 
 const char* lastError(OrtStatus* st) { return (st && g_ort->GetErrorMessage) ? g_ort->GetErrorMessage(st) : "unknown"; }
@@ -78,14 +88,13 @@ void releaseSessionEnv(OrtEnv* e, OrtSession* s1, OrtSession* s2) {
     }
 }
 
-struct SpVocab {
-    std::vector<std::string> idToPiece;
-    std::map<std::string, int64_t> pieceToId;
-    int64_t pad_id = 0, bos_id = 0, eos_id = 0, unk_id = 0, decoder_start_id = 0;
-    int maxLen = 0;
+struct PackModel {
+    sentencepiece::SentencePieceProcessor sp;   // real SentencePiece (Marian-exact)
+    int64_t pad_id = 0, bos_id = 0, eos_id = 0, decoder_start_id = 0;
+    bool spReady = false;
 };
 
-bool loadConfig(const std::string& dir, SpVocab& v) {
+bool loadConfig(const std::string& dir, PackModel& m) {
     std::ifstream cfg(dir + "/config.json");
     if (!cfg.is_open()) { LOGE("config.json missing in %s", dir.c_str()); return false; }
     std::string s((std::istreambuf_iterator<char>(cfg)), std::istreambuf_iterator<char>());
@@ -96,48 +105,34 @@ bool loadConfig(const std::string& dir, SpVocab& v) {
         if (pos == std::string::npos) return -1;
         return atoll(s.c_str() + pos + 1);
     };
-    v.pad_id = findNum("\"pad_token_id\"");
-    v.eos_id = findNum("\"eos_token_id\"");
-    v.bos_id = findNum("\"bos_token_id\"");
-    v.decoder_start_id = findNum("\"decoder_start_token_id\"");
-    if (v.decoder_start_id < 0) v.decoder_start_id = v.bos_id;
+    m.pad_id = findNum("\"pad_token_id\"");
+    m.eos_id = findNum("\"eos_token_id\"");
+    m.bos_id = findNum("\"bos_token_id\"");
+    m.decoder_start_id = findNum("\"decoder_start_token_id\"");
+    if (m.decoder_start_id < 0) m.decoder_start_id = m.bos_id;
     return true;
 }
 
-bool loadVocab(const std::string& dir, SpVocab& v) {
-    std::ifstream f(dir + "/tokenizer/sp.vocab");
-    if (!f.is_open()) { LOGE("tokenizer/sp.vocab missing in %s", dir.c_str()); return false; }
-    std::string line;
-    while (std::getline(f, line)) {
-        auto tab = line.find('\t');
-        if (tab == std::string::npos) continue;
-        int64_t id = atoll(line.substr(0, tab).c_str());
-        std::string piece = line.substr(tab + 1);
-        if (id < 0) continue;
-        if ((int64_t)v.idToPiece.size() <= id) v.idToPiece.resize((size_t)id + 1);
-        v.idToPiece[(size_t)id] = piece;
-        if (v.pieceToId.find(piece) == v.pieceToId.end()) v.pieceToId[piece] = id;
-        if ((int)piece.size() > v.maxLen) v.maxLen = (int)piece.size();
+// Real SentencePiece: on-device tokenizer must produce IDENTICAL ids to HF
+// MarianTokenizer. HF encodes with the model's own SentencePiece (no extra
+// BOS/EOS for a single sample), so we use sp.EncodeAsIds directly.
+bool loadTokenizer(const std::string& dir, PackModel& m) {
+    std::string spPath = dir + "/tokenizer/sentencepiece.model";
+    if (m.sp.Load(spPath).ok()) {
+        m.spReady = true;
+        LOGI("SentencePiece loaded: %s", spPath.c_str());
+        return true;
     }
-    return !v.idToPiece.empty();
+    LOGE("SentencePiece load failed: %s", spPath.c_str());
+    m.spReady = false;
+    return false;
 }
 
-// Longest-match tokenization over the real SP vocab (ids incl. BOS/EOS).
-std::vector<int64_t> tokenize(const std::string& text, const SpVocab& v) {
-    std::vector<int64_t> ids;
-    ids.push_back(v.bos_id);
-    size_t i = 0;
-    const size_t n = text.size();
-    while (i < n) {
-        int len = std::min(v.maxLen > 0 ? v.maxLen : 1, (int)(n - i));
-        bool matched = false;
-        for (; len >= 1; --len) {
-            auto it = v.pieceToId.find(text.substr(i, (size_t)len));
-            if (it != v.pieceToId.end()) { ids.push_back(it->second); i += (size_t)len; matched = true; break; }
-        }
-        if (!matched) { ids.push_back(v.unk_id); i += 1; }
-    }
-    ids.push_back(v.eos_id);
+// Marian-exact token ids (HF: EncodeAsIds returns exactly the model's ids).
+std::vector<int64_t> tokenize(const std::string& text, const PackModel& m) {
+    if (!m.spReady) return {};
+    std::vector<int> ids32 = m.sp.EncodeAsIds(text);
+    std::vector<int64_t> ids(ids32.begin(), ids32.end());
     return ids;
 }
 
@@ -147,7 +142,7 @@ struct CachedPair {
     OrtEnv* env = nullptr;
     OrtSession* enc = nullptr;
     OrtSession* dec = nullptr;
-    SpVocab vocab;
+    std::unique_ptr<PackModel> model;  // SentencePieceProcessor is non-copyable
 };
 
 CachedPair g_pair;
@@ -161,7 +156,11 @@ void clearPair() {
     if (g_ort) {
         releaseSessionEnv(g_pair.env, g_pair.enc, g_pair.dec);
     }
-    g_pair = CachedPair();
+    g_pair.dir.clear();
+    g_pair.env = nullptr;
+    g_pair.enc = nullptr;
+    g_pair.dec = nullptr;
+    g_pair.model.reset();
 }
 
 } // namespace
@@ -194,16 +193,17 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
 
     std::lock_guard<std::mutex> lk(g_mtx);  // serialize load + translate (P1)
 
-    if (!loadOrtApi()) return env->NewStringUTF("102:no-ort");
+    if (!ensureOrtApiLocked()) return env->NewStringUTF("102:no-ort");
 
     // ---- Session cache: reuse encoder/decoder for this pair (P1) ----
     if (g_pair.dir != dir || g_pair.enc == nullptr || g_pair.dec == nullptr) {
         clearPair();
-        if (!loadConfig(dir, g_pair.vocab) || !loadVocab(dir, g_pair.vocab)) {
-            g_pair.dir = dir; // keep dir so we retry vocab if files later appear? no — report
+        auto m = std::make_unique<PackModel>();
+        if (!loadConfig(dir, *m) || !loadTokenizer(dir, *m)) {
             clearPair();
             return env->NewStringUTF("103:bad-pack");
         }
+        g_pair.model = std::move(m);
         OrtEnv* env1 = nullptr;
         if (!check(g_ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "itantra_mt", &env1))) {
             return env->NewStringUTF("104:no-env");
@@ -222,17 +222,19 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         LOGI("MT pair cached: %s", dir.c_str());
     }
 
-    const SpVocab& vocab = g_pair.vocab;
+    const PackModel& model = *g_pair.model;
     OrtSession* encoder = g_pair.enc;
     OrtSession* decoder = g_pair.dec;
     OrtEnv* ortEnv = g_pair.env;
 
-    int64_t t0 = nowNs();
-    auto ids = tokenize(text, vocab);
-    int64_t tTok = nowNs() - t0;
-
     OrtMemoryInfo* mem = nullptr;
     if (!check(g_ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mem))) return env->NewStringUTF("107:no-mem");
+
+    int64_t t0 = nowNs();
+    auto ids = tokenize(text, model);
+    if (ids.empty())
+        { g_ort->ReleaseMemoryInfo(mem); return env->NewStringUTF("111:tok-fail"); }
+    int64_t tTok = nowNs() - t0;
 
     // ---- Encoder ----
     int64_t t1 = nowNs();
@@ -264,9 +266,9 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
     // ---- Decoder greedy (bounded) ----
     int64_t t2 = nowNs();
     const int64_t maxSteps = 64;
-    const int64_t vocabSize = (int64_t)vocab.idToPiece.size();
-    std::vector<int64_t> decIds = {vocab.decoder_start_id};
-    std::string out;
+    const int64_t vocabSize = (int64_t)model.sp.GetPieceSize();
+    std::vector<int64_t> decIds = {model.decoder_start_id};
+    std::vector<int64_t> generated;
     bool done = false;
     int steps = 0;
     while (steps < maxSteps && !done) {
@@ -291,21 +293,20 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         std::vector<float> logits((float*)logitsData, (float*)logitsData + T * vocabSize);
         g_ort->ReleaseValue(decOuts[0]);
         int64_t next = argmaxOverLogits(logits, (T - 1) * vocabSize, vocabSize);
-        if (next == vocab.eos_id || next == vocab.pad_id) { done = true; break; }
-        if (next >= 0 && next < (int64_t)vocab.idToPiece.size()) {
-            std::string piece = vocab.idToPiece[(size_t)next];
-            if (piece.rfind("▁", 0) == 0) {
-                if (!out.empty()) out += ' ';
-                out += piece.substr(3);
-            } else {
-                out += piece;
-            }
-        }
+        if (next == model.eos_id || next == model.pad_id) { done = true; break; }
+        generated.push_back(next);
         decIds.push_back(next);
         steps++;
     }
     int64_t tDec = nowNs() - t2;
     (void)ortEnv; // env lives with the cached pair; released on nnRelease / pair change
+
+    // Decode with the REAL SentencePiece (Marian-exact detokenization).
+    std::string out;
+    if (model.spReady) {
+        std::vector<int> gen32(generated.begin(), generated.end());
+        out = model.sp.DecodeIds(gen32);
+    }
 
     g_ort->ReleaseMemoryInfo(mem);
 

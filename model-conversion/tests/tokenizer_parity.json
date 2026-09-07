@@ -1,0 +1,73 @@
+[
+  {
+    "language": "hi",
+    "input": "आप कहाँ जा रहे हैं?",
+    "expected_token_ids": [
+      71,
+      875,
+      135,
+      84,
+      15,
+      29
+    ]
+  },
+  {
+    "language": "hi",
+    "input": "मुझे पानी चाहिए।",
+    "expected_token_ids": [
+      106,
+      410,
+      123,
+      28
+    ]
+  },
+  {
+    "language": "hi",
+    "input": "यह एक परीक्षण संदेश है।",
+    "expected_token_ids": [
+      34,
+      23,
+      5080,
+      245,
+      4,
+      28
+    ]
+  },
+  {
+    "language": "en",
+    "input": "Where are you going?",
+    "expected_token_ids": [
+      4703,
+      20323,
+      987,
+      5188,
+      2848,
+      16696,
+      29
+    ]
+  },
+  {
+    "language": "en",
+    "input": "I need water.",
+    "expected_token_ids": [
+      3227,
+      769,
+      40,
+      22519,
+      30
+    ]
+  },
+  {
+    "language": "en",
+    "input": "This is a test message.",
+    "expected_token_ids": [
+      9686,
+      2781,
+      449,
+      14180,
+      4930,
+      10433,
+      30
+    ]
+  }
+]
