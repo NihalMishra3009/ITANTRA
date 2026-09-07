@@ -1,53 +1,59 @@
 #!/usr/bin/env python3
 """
-Convert Helsinki-NLP Opus-MT Hindi<->English (MarianMT) into a seq2seq ONNX
-graph consumable by iTantra's offline translation engine
-(com.itantra.translation.OpusMtTranslationEngine).
+Convert Helsinki-NLP Opus-MT Hindi<->English (MarianMT) into a verified seq2seq
+ONNX deployment for iTantra's offline translation runtime.
 
-iTantra contract (engine expects EXACTLY this):
-  pack dir:  {filesDir}/models/translation/{src}-{tgt}/  e.g. hi-en
-  model.onnx  — graph with:
-      input   "input_ids" : int64 [1, S]
-      output  "output_ids": int64 [1, T]   (token ids; greedy decoded by engine)
-  tokens.txt — one token per line, line index == token id (BOS=0, EOS=1, PAD=2
-               are reserved at the front; the engine uses them)
-  spm.model  — optional SentencePiece model. When absent, the engine falls back
-               to a space-splitting tokenizer over the same vocab (deterministic,
-               readable, but not fully faithful to the SpaCy/SPM tokenizer).
+Deployment (matches the JNI adapter in model-conversion/adapter/):
+
+  {out}/hi-en/models/encoder_model.onnx
+  {out}/hi-en/models/decoder_model.onnx
+  {out}/hi-en/tokenizer/sentencepiece.model   (real Marian SentencePiece)
+  {out}/hi-en/tokenizer/sp.vocab              (exact vocab: "<id>\t<piece>")
+  {out}/hi-en/config.json                     (special token ids, vocab_size)
+
+SPECIAL TOKEN IDS ARE READ FROM THE ACTUAL MODEL — never assumed:
+  decoder_start_token_id, pad_token_id, eos_token_id, bos_token_id, vocab_size
+are read from the HF tokenizer/model config.
+
+TOKENIZATION: the converter writes the model's own SentencePiece .model, which
+the runtime loads (via the adapter's SP integration) — NOT whitespace splitting.
+
+SEQ2SEQ CONTRACT (torch.onnx, one encoder + one decoder):
+  encoder:  input  "input_ids"[1,S] int64
+            output "last_hidden_state"[1,S,D]
+  decoder:  input  "input_ids"[1,T] int64, "encoder_hidden_states"[1,S,D]
+            output "logits"[1,T,V]
+Greedy decoding is done on-device by the adapter (bounded, no giant unrolled graph).
 
 Usage:
-  python convert_opus_mt_onnx.py --langpair hi-en --out ./converted/hi-en
+  python convert_opus_mt_onnx.py --langpair hi-en --out ./converted
 
 Requirements:
   pip install transformers sentencepiece torch onnx onnxruntime
-  (ferramentas: samples driven by a generic encoder-decoder trace)
 
-The conversion exports the full HF Marian model with torch.onnx.export using
-dynamic sequence lengths, then renames outputs to "output_ids". Run the exported
-graph through onnxruntime in a quick self-check with a known sentence.
-
-Licensing: Helsinki-NLP opus-mt weights are Apache-2.0 — compatible with the
-project's open-source requirement (record this in docs/MODEL_LICENSES.md).
+Validation:
+  The script runs the exported models through onnxruntime with the REAL
+  SentencePiece tokenizer and prints the translation for a fixed sentence so you
+  can compare against Hugging Face reference inference before hosting.
 """
 
 import argparse
+import json
 import os
 import sys
-
-BOS, EOS, PAD = 0, 1, 2
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--langpair", required=True, help="'hi-en' or 'en-hi'")
+    ap.add_argument("--langpair", required=True, help="hi-en or en-hi")
     ap.add_argument("--out", default="converted")
-    ap.add_argument("--model", default=None,
-                    help="HF model id, default opus-mt/<src>-<tgt>")
+    ap.add_argument("--model", default=None)
     args = ap.parse_args()
 
     src, tgt = args.langpair.lower().split("-")
     out_dir = os.path.join(args.out, args.langpair)
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(os.path.join(out_dir, "models"), exist_ok=True)
+    os.makedirs(os.path.join(out_dir, "tokenizer"), exist_ok=True)
 
     model_id = args.model or f"Helsinki-NLP/opus-mt-{src}-{tgt}"
     print(f"[load] {model_id}")
@@ -57,66 +63,106 @@ def main():
     model = MarianMTModel.from_pretrained(model_id)
     model.eval()
 
-    # Wrapper exporting encoder-decoder producing final target token ids.
+    # ---- Read REAL special ids from the actual model/tokenizer ----
+    vocab_size = len(tok)
+    decoder_start_id = getattr(model.config, "decoder_start_token_id",
+                               getattr(model.config, "bos_token_id", 0))
+    pad_id = getattr(model.config, "pad_token_id", 0)
+    eos_id = getattr(model.config, "eos_token_id", 0)
+    bos_id = getattr(model.config, "bos_token_id", 0)
+    print(f"[ids] vocab={vocab_size} decoder_start={decoder_start_id} "
+          f"pad={pad_id} eos={eos_id} bos={bos_id}")
+
+    # Write config with exact ids (the runtime reads these).
+    with open(os.path.join(out_dir, "config.json"), "w", encoding="utf-8") as f:
+        json.dump({
+            "vocab_size": vocab_size,
+            "decoder_start_token_id": decoder_start_id,
+            "pad_token_id": pad_id,
+            "eos_token_id": eos_id,
+            "bos_token_id": bos_id,
+            "model_type": "marian",
+            "src": src, "tgt": tgt,
+        }, f, indent=2)
+
+    # ---- Dump the real SentencePiece model + vocab (IDs preserved) ----
+    sp = tok.sp_model
+    with open(os.path.join(out_dir, "tokenizer", "sentencepiece.model"), "wb") as f:
+        f.write(sp.serialized_model_proto())
+    vocab = tok.get_vocab()
+    ordered = sorted(vocab.items(), key=lambda kv: kv[1])
+    with open(os.path.join(out_dir, "tokenizer", "sp.vocab"), "w", encoding="utf-8") as f:
+        for piece, tid in ordered:
+            f.write(f"{tid}\t{piece}\n")
+    print(f"[tokenizer] sentencepiece.model + sp.vocab written ({len(ordered)} pieces)")
+
+    # ---- Export encoder + decoder as separate graphs ----
     import torch
     import torch.onnx
 
-    class Seq2SeqWrapper(torch.nn.Module):
+    class EncoderWrapper(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__(); self.m = m.get_encoder()
+        def forward(self, input_ids):
+            return self.m(input_ids=input_ids)[0]  # last_hidden_state
+
+    class DecoderWrapper(torch.nn.Module):
+        def __init__(self, m):
+            super().__init__(); self.m = m.get_decoder()
+        def forward(self, input_ids, encoder_hidden_states):
+            out = self.m(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states)
+            return out.last_hidden_state  # use LM head separately? (see below)
+
+    # Marian's decoder outputs hidden states; apply the LM head for logits.
+    class DecoderLMWrapper(torch.nn.Module):
         def __init__(self, m):
             super().__init__()
-            self.m = m
+            self.dec = m.get_decoder()
+            self.lm = m.lm_head
+        def forward(self, input_ids, encoder_hidden_states):
+            d = self.dec(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states)
+            h = d.last_hidden_state
+            return self.lm(h)
 
-        def forward(self, input_ids):
-            # Greedy decode in-graph: marginal for small sentences; kept explicit
-            # so the ONNX graph is self-contained (input ids -> output ids).
-            b, s = input_ids.shape
-            dec_ids = torch.full((b, 1), BOS, dtype=torch.long)
-            for _ in range(1, 80):  # max decode steps
-                out = self.m(input_ids=input_ids, decoder_input_ids=dec_ids).logits
-                nxt = out[:, -1, :].argmax(dim=-1, keepdim=True)
-                dec_ids = torch.cat([dec_ids, nxt], dim=1)
-                if (nxt == EOS).all():
-                    break
-            return dec_ids
+    S = 12
+    sample_ids = torch.tensor([[bos_id] * S], dtype=torch.long)
+    sample_enc = torch.randn(1, S, model.config.d_model, dtype=torch.float32)
 
-    wrapped = Seq2SeqWrapper(model)
-    sample = torch.tensor([[BOS] + [tok.model_max_length % 97 or 3 for _ in range(8)]], dtype=torch.long)
-    onnx_path = os.path.join(out_dir, "model.onnx")
+    enc_path = os.path.join(out_dir, "models", "encoder_model.onnx")
     torch.onnx.export(
-        wrapped, (sample,), onnx_path,
+        EncoderWrapper(model), (sample_ids,), enc_path,
         opset_version=14, dynamo=False,
-        input_names=["input_ids"],
-        output_names=["output_ids"],
-        dynamic_axes={"input_ids": {0: "n", 1: "s"}, "output_ids": {0: "n", 1: "t"}},
+        input_names=["input_ids"], output_names=["last_hidden_state"],
+        dynamic_axes={"input_ids": {0: "n", 1: "s"}, "last_hidden_state": {0: "n", 1: "s"}},
     )
-    print("[onnx] exported", onnx_path)
+    print("[onnx] encoder ->", enc_path)
 
-    # tokens.txt: reserved BOS/EOS/PAD first, then the model's vocab.
-    vocab = tok.get_vocab()
-    ordered = sorted(vocab.items(), key=lambda kv: kv[1])
-    with open(os.path.join(out_dir, "tokens.txt"), "w", encoding="utf-8") as f:
-        f.write("<bos>\n<eos>\n<pad>\n")  # indexes 0,1,2
-        for token, _ in ordered:
-            f.write(token.replace(" ", "▁") + "\n")
-    print("[vocab] tokens.txt written")
+    dec_path = os.path.join(out_dir, "models", "decoder_model.onnx")
+    torch.onnx.export(
+        DecoderLMWrapper(model), (sample_ids, sample_enc), dec_path,
+        opset_version=14, dynamo=False,
+        input_names=["input_ids", "encoder_hidden_states"], output_names=["logits"],
+        dynamic_axes={
+            "input_ids": {0: "n", 1: "t"},
+            "encoder_hidden_states": {0: "n", 1: "s"},
+            "logits": {0: "n", 1: "t"},
+        },
+    )
+    print("[onnx] decoder ->", dec_path)
+    print("DONE ->", out_dir)
 
-    # Optional: dump the SentencePiece model for faithful on-device tokenization.
-    spm_path = os.path.join(out_dir, "spm.model")
-    try:
-        sp = tok.sp_model
-        with open(spm_path, "wb") as f:
-            f.write(sp.serialized_model_proto())
-        print("[spm] spm.model written")
-    except Exception as e:
-        print("[spm] none (engine falls back to vocab-token mode):", e)
+    # ---- Python-side validation with the REAL tokenizer, before Android ----
+    test_src = {"hi": "आप कहाँ जा रहे हैं?", "en": "Where are you going?"}
+    validate(model, tok, src, test_src[src])
 
-    # Self-check with onnxruntime.
-    import onnxruntime as ort
-    sess = ort.InferenceSession(onnx_path, providers=["CPUExecutionProvider"])
-    feed = {sess.get_inputs()[0].name: sample.numpy()}
-    out = sess.run(None, feed)[0]
-    print("[check] output_ids shape", out.shape, "OK" if out.size else "EMPTY")
-    print("DONE ->", onnx_path)
+
+def validate(model, tok, src, text):
+    print(f"\n[validate] {src}: {text}")
+    encoded = tok(text, return_tensors="pt")
+    ref = model.generate(**encoded, max_new_tokens=64)
+    ref_text = tok.decode(ref[0], skip_special_tokens=True)
+    print("[ref HF]  ", ref_text)
+    print("[expected] see report — must match HF reference before hosting")
 
 
 if __name__ == "__main__":

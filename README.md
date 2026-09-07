@@ -57,10 +57,29 @@ Key design decisions:
   `TRANSLATION_FAILED` / "Cross-language unavailable" instead.
 - **SOS is never translated.** Emergency traffic is protocol-level and works with
   zero translation models.
-- Translation engines are pluggable (`TranslationEngine` interface). The shipped
-  runtime is **Helsinki-NLP Opus-MT** (Apache-2.0) exported to ONNX and executed
-  with the bundled ONNX Runtime. See `model-conversion/convert_opus_mt_onnx.py`
-  and `docs/MODEL_LICENSES.md`. First verified pair: **hi ↔ en** (extensible).
+- Translation engines are pluggable (`TranslationEngine` interface). The target
+  runtime is **Helsinki-NLP Opus-MT** (Apache-2.0) exported to a verified seq2seq
+  ONNX deployment and executed with a small JNI adapter (`libitantra_mt.so`) that
+  dlopens the ONNX Runtime **already linked by sherpa-onnx** (no second
+  libonnxruntime.so, avoiding the dual-ORT conflict).
+  - Runtime architecture source: `model-conversion/adapter/` (JNI C++ + vendored
+    ORT 1.27 C API header). Build it with the NDK; the app loads it if present.
+  - Model conversion: `model-conversion/convert_opus_mt_onnx.py` → encoder/decoder
+    ONNX + SentencePiece vocab/config for `hi-en` / `en-hi`.
+  - **Honest current status:** architecture and pipeline are complete and unit
+    tested, but the real Opus-MT ONNX weights are NOT yet hosted and the native
+    adapter is NOT yet compiled/verified, so the engine reports
+    `TRANSLATION_UNAVAILABLE` until those operator steps are done. No fake
+    translation is ever emitted.
+
+## Cross-language runtime status
+
+- **Architecture:** COMPLETE (tested)
+- **Model artifact (hi-en / en-hi ONNX packs):** NOT COMPLETE (requires
+  `convert_opus_mt_onnx.py` run + hosting)
+- **Android runtime (JNI adapter):** NOT COMPLETE (source in
+  `model-conversion/adapter/`; requires an NDK build)
+- **Real device translation verified:** NOT VERIFIED
 
 ---
 
