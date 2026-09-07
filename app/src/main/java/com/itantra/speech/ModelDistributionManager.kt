@@ -321,24 +321,31 @@ class ModelDistributionManager(
                 val base = path.substringAfterLast('/')
                 if (e.isDirectory) continue
 
-                val destRel: String
+                val destRel: String?
                 if (packRole == ModelRole.TRANSLATION) {
-                    // Keep the whole tree, minus the leading {pair}/ directory.
-                    destRel = path.split('/').drop(1).joinToString("/")
-                    if (destRel.isBlank()) continue
-                    if (base.endsWith(".onnx")) onnxFound = true
-                    if (base.equals("config.json", true)) tokensFound = true // config as the required file
-                } else {
-                    val isOnnx = base.endsWith(".onnx") && e.isFile
-                    val isTokens = base.equals("tokens.txt", ignoreCase = true) && e.isFile
-                    val isEspeak = path.contains("espeak-ng-data") && e.isFile
-                    if (!isOnnx && !isTokens && !isEspeak) continue
+                    // Engine contract per pack dir:
+                    //   encoder_model.onnx, decoder_model.onnx, config.json  (root)
+                    //   tokenizer/sentencepiece.model, tokenizer/sp.vocab   (tokenizer/)
                     destRel = when {
-                        isOnnx -> base
-                        isTokens -> "tokens.txt"
-                        else -> path.substring(path.indexOf("espeak-ng-data"))
+                        base.endsWith(".onnx") -> base
+                        base.equals("config.json", true) -> base
+                        path.contains("tokenizer/") -> path.substring(path.indexOf("tokenizer/"))
+                        else -> null
                     }
-                    if (isOnnx) onnxFound = true else if (isTokens) tokensFound = true else espeakFound = true
+                    if (destRel == null) continue
+                    if (base.endsWith(".onnx")) onnxFound = true
+                    if (base.equals("config.json", true)) tokensFound = true
+                } else {
+                    destRel = when {
+                        base.endsWith(".onnx") && e.isFile -> base
+                        base.equals("tokens.txt", ignoreCase = true) && e.isFile -> "tokens.txt"
+                        path.contains("espeak-ng-data") && e.isFile -> path.substring(path.indexOf("espeak-ng-data"))
+                        else -> null
+                    }
+                    if (destRel == null) continue
+                    if (base.endsWith(".onnx")) onnxFound = true
+                    else if (base.equals("tokens.txt", true)) tokensFound = true
+                    else espeakFound = true
                 }
 
                 val dest = File(tmpExtract, destRel)

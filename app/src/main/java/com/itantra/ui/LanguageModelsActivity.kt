@@ -112,24 +112,38 @@ class LanguageModelsActivity : AppCompatActivity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(8), 0, 0)
+                setPadding(0, dp(6), 0, 0)
             }
-            row.addView(TextView(this).apply {
+            val labels = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            labels.addView(TextView(this).apply {
                 text = "${pack.language.nativeName} → ${pack.targetLanguage?.displayName ?: "?"}"
                 setTextColor(getColor(R.color.text_white))
                 textSize = 13f
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-            val label = when (status) {
-                PackStatus.INSTALLED, PackStatus.LOADED -> "✓ INSTALLED"
-                else -> "REQUIRES MODEL FILES"
+            val progress = TextView(this).apply {
+                visibility = View.GONE
+                setTextColor(getColor(R.color.comm_amber))
+                textSize = 10f
             }
-            row.addView(TextView(this).apply {
-                text = label
-                setTextColor(getColor(if (status == PackStatus.INSTALLED || status == PackStatus.LOADED) R.color.comm_green else R.color.comm_amber))
-                textSize = 11f
-                setTypeface(typeface, android.graphics.Typeface.BOLD)
-            })
+            labels.addView(progress)
+            row.addView(labels)
+
+            val action = when {
+                status == PackStatus.INSTALLED || status == PackStatus.LOADED ->
+                    smallButton("Delete", R.color.comm_red) {
+                        smm.distributionManager().deletePack(pack)
+                        render()
+                    }
+                pack.downloadUrl != null ->
+                    smallButton("Download", R.color.comm_green) {
+                        startDownload(pack, progress)
+                    }
+                else -> smallButton("Not hosted", R.color.text_faint) { /* no-op */ }
+            }
+            row.addView(action)
             section.addView(row)
         }
         return section

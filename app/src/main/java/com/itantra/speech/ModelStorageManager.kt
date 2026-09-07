@@ -30,7 +30,13 @@ class ModelStorageManager(private val context: Context) {
 
     /** Staging directory for an in-flight install (never visible as installed). */
     fun stagingDir(role: ModelRole, lang: String): File =
-        File(File(modelsDir, STAGING_DIR), "${if (role == ModelRole.STT) "stt" else "tts"}/${lang.lowercase()}")
+        File(File(modelsDir, STAGING_DIR), "${roleSubdir(role)}/${lang.lowercase()}")
+
+    private fun roleSubdir(role: ModelRole): String = when (role) {
+        ModelRole.STT -> "stt"
+        ModelRole.TRANSLATION -> "translation"
+        else -> "tts"
+    }
 
     /**
      * True iff this staged/installed pack passes REQUIRED-file validation for its
