@@ -36,6 +36,14 @@ data class PacketSizeRecord(
     val compressionRatio: Float get() = if (jsonBytes > 0) jsonBytes.toFloat() / binaryPacketBytes else 0f
 }
 
+/** Per-stage translation timing (monotonic, microseconds — from the native adapter). */
+data class TranslationTiming(
+    val tokenizerMicros: Long,
+    val encoderMicros: Long,
+    val decoderMicros: Long,
+    val totalMicros: Long
+)
+
 /**
  * Structured telemetry and benchmark logger for offline transceiver latency, RTF,
  * and low-bitrate efficiency evaluation. All timings use real monotonic clocks.
@@ -121,6 +129,12 @@ object BenchmarkLogger {
         val src = sourceText.toByteArray(Charsets.UTF_8).size
         val tgt = targetText.toByteArray(Charsets.UTF_8).size
         Log.i(TAG, "CROSS-LANG [$language] source=$src B → translated=$tgt B → wire packet=$packetBytes B")
+    }
+
+    /** Native per-stage translation timing (monotonic). */
+    fun logTranslationTiming(t: TranslationTiming) {
+        Log.i(TAG, "TRANSLATION TIMING (us): tokenizer=${t.tokenizerMicros} encoder=${t.encoderMicros} " +
+                "decoder=${t.decoderMicros} total=${t.totalMicros}")
     }
 
     fun getRecords(): List<LatencyRecord> {

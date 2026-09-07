@@ -142,7 +142,7 @@ extern "C" {
 #define __has_feature(x) 0
 #endif
 #if ((__cplusplus >= 201103L) || (_MSC_VER >= 1900) || (defined(__has_feature) && __has_feature(cxx_noexcept)))
-#define NO_EXCEPTION noexcept
+#define NO_EXCEPTION
 #else
 #define NO_EXCEPTION throw()
 #endif

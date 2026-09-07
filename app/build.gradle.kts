@@ -47,6 +47,22 @@ android {
         viewBinding = true
     }
 
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
+    }
+
+    // Ensure libitantra_mt.so is packaged for both target ABIs (and that the
+    // sherpa-bundled libonnxruntime.so is the single ORT copy on device).
+    packagingOptions {
+        jniLibs {
+            // Only one libonnxruntime.so must ship — from sherpa onnx (same SONAME).
+            pickFirst("**/libonnxruntime.so")
+        }
+    }
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }

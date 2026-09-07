@@ -106,14 +106,6 @@ def main():
         def forward(self, input_ids):
             return self.m(input_ids=input_ids)[0]  # last_hidden_state
 
-    class DecoderWrapper(torch.nn.Module):
-        def __init__(self, m):
-            super().__init__(); self.m = m.get_decoder()
-        def forward(self, input_ids, encoder_hidden_states):
-            out = self.m(input_ids=input_ids, encoder_hidden_states=encoder_hidden_states)
-            return out.last_hidden_state  # use LM head separately? (see below)
-
-    # Marian's decoder outputs hidden states; apply the LM head for logits.
     class DecoderLMWrapper(torch.nn.Module):
         def __init__(self, m):
             super().__init__()
