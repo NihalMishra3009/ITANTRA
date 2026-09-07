@@ -79,6 +79,11 @@
     <string name="sos_retrying">SOS RETRYING</string>
     <string name="sos_queued_nopeer">SOS QUEUED / NO PEER</string>
     <string name="sos_failed">SOS FAILED</string>
+    <string name="translating">TRANSLATING</string>
+    <string name="lang_from">FROM</string>
+    <string name="lang_to">TO</string>
+    <string name="translation_failed">CROSS-LANGUAGE UNAVAILABLE</string>
+    <string name="translation_unavailable">Offline translation model unavailable for this pair.</string>
 
     <!-- Network / models screens -->
     <string name="fatal_error">FATAL ERROR</string>

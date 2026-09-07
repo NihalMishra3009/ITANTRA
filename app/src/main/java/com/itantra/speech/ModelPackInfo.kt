@@ -51,9 +51,16 @@ data class LanguageModelPack(
     val isMultilingualShared: Boolean, // true = shared checkpoint, not per-language
     val supportsLanguage: Boolean,   // whether this model genuinely supports the language
     val notes: String,
-    val isEngine: Boolean = false    // true = shared engine pack (e.g. Whisper upgrade), not per-language
+    val isEngine: Boolean = false,   // true = shared engine pack (e.g. Whisper upgrade), not per-language
+    /** Target language for a TRANSLATION pack (source = [language]); null for STT/TTS. */
+    val targetLanguage: SupportedLanguage? = null
 ) {
     val sizeMb: Double get() = sizeBytes / (1024.0 * 1024.0)
+
+    /** Stable dir key: for TRANSLATION packs "{src}-{tgt}", else the language code. */
+    val storageKey: String get() =
+        if (role == ModelRole.TRANSLATION && targetLanguage != null) "${language.code}-${targetLanguage.code}"
+        else language.code
 }
 
 /** Maps the 10 required iTantra languages. */

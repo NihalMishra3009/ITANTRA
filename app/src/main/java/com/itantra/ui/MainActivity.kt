@@ -190,7 +190,9 @@ class MainActivity : AppCompatActivity() {
                         orchestrator.speechModelManager.selectLanguage(lang)
                     }
                 }
+                syncTargetDefault(lang, previous)
                 adapter.notifyDataSetChanged()
+                renderLanguageMode()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -198,6 +200,43 @@ class MainActivity : AppCompatActivity() {
         val initial = langs.indexOfFirst { it == orchestrator.currentLanguage }
             .takeIf { it >= 0 } ?: langs.indexOfFirst { it == previous }.takeIf { it >= 0 } ?: 0
         binding.spinnerLanguage.setSelection(initial, false)
+
+        // Second (TO) dropdown: the language the receiver expects.
+        val targetAdapter = LanguageAdapter(this, langs)
+        binding.spinnerLanguageTarget.adapter = targetAdapter
+        binding.spinnerLanguageTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                val lang = langs[position]
+                if (orchestrator.targetLanguage != lang) {
+                    orchestrator.targetLanguage = lang
+                }
+                targetAdapter.notifyDataSetChanged()
+                renderLanguageMode()
+            }
+
+            override fun onNothingSelected(parent: AdapterView<*>?) {}
+        }
+        val tInitial = langs.indexOfFirst { it == orchestrator.targetLanguage }
+            .takeIf { it >= 0 } ?: langs.indexOfFirst { it == orchestrator.currentLanguage }.takeIf { it >= 0 } ?: 0
+        binding.spinnerLanguageTarget.setSelection(tInitial, false)
+        renderLanguageMode()
+    }
+
+    /** Keep TO sane when FROM changes: default TO to the new source (same-language) until the user picks otherwise. */
+    private fun syncTargetDefault(newSource: com.itantra.stt.SupportedLanguage, previous: com.itantra.stt.SupportedLanguage?) {
+        // If the user had not explicitly chosen a different TO (or it pointed at the old FROM),
+        // follow the new FROM.
+        val t = binding.spinnerLanguageTarget.selectedItem as? com.itantra.stt.SupportedLanguage
+        if (t == null || t == previous || t == orchestrator.targetLanguage) {
+            orchestrator.targetLanguage = newSource
+            val idx = dropdownLanguages().indexOfFirst { it == newSource }
+            if (idx >= 0) binding.spinnerLanguageTarget.setSelection(idx, false)
+        }
+    }
+
+    /** Render SAME-LANGUAGE vs CROSS-LANGUAGE mode + pipeline readiness where required models are reflected. */
+    private fun renderLanguageMode() {
+        refreshPeerState()
     }
 
     /** Custom language dropdown: shows real STT/TTS availability per language. */
@@ -314,6 +353,21 @@ class MainActivity : AppCompatActivity() {
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
+                    // Phase 18: gate PTT for cross-language — do not let the user discover
+                    // a missing model only after speaking. Same-language always allowed.
+                    val src = orchestrator.sourceLanguage
+                    val tgt = orchestrator.targetLanguage
+                    if (src != tgt) {
+                        val ready = orchestrator.speechModelManager.pipelineReady(src, tgt)
+                        if (!ready) {
+                            Toast.makeText(
+                                this,
+                                "Required offline models missing for ${src.nativeName} → ${tgt.displayName}. Open MODELS.",
+                                Toast.LENGTH_LONG
+                            ).show()
+                            return@setOnTouchListener true
+                        }
+                    }
                     binding.btnPtt.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_red)
                     binding.btnPtt.text = getString(R.string.ptt_release_to_send)
                     orchestrator.onPttPressed(isAlert = false)
@@ -467,8 +521,14 @@ class MainActivity : AppCompatActivity() {
             return
         }
         binding.tvPerfSummary.text = getString(R.string.latency_ms, metrics.totalE2eLatencyMs)
+        val translateLine = if (metrics.translationLatencyMs > 0) {
+            "Translation     ${metrics.translationLatencyMs} ms\n"
+        } else {
+            ""
+        }
         binding.tvLatencyMetrics.text =
             "STT              ${metrics.sttLatencyMs} ms\n" +
+            translateLine +
             "Transport        ${metrics.transportLatencyMs} ms\n" +
             "TTS              ${metrics.ttsLatencyMs} ms\n" +
             "RTF              ${String.format("%.2f", metrics.rtf)}\n" +
@@ -532,9 +592,28 @@ class MainActivity : AppCompatActivity() {
         // NETWORK mini-stats — only values that actually exist.
         val hops = routes.minOfOrNull { it.hopCount }?.toString() ?: "—"
         val queue = orch.deliveryTracker.getAll()
+        val src = orch.sourceLanguage
+        val tgt = orch.targetLanguage
+        val cross = src != tgt
+        val modeLine = if (cross) {
+            "CROSS-LANGUAGE · ${src.nativeName} → ${tgt.displayName}"
+        } else {
+            "SAME-LANGUAGE · ${src.nativeName}"
+        }
         binding.tvNetworkStats.text =
             "Peers: ${neighbors.size}   ·   Hops: $hops   ·   Transport: $transport\n" +
-            "Security: ECDH P-256 · AES-256-GCM   ·   Queue: ${queue.size}"
+            "Security: ECDH P-256 · AES-256-GCM   ·   Queue: ${queue.size}\n" +
+            modeLine + if (cross) networkModeSuffix() else ""
+    }
+
+    private fun networkModeSuffix(): String {
+        val src = orchestrator.sourceLanguage
+        val tgt = orchestrator.targetLanguage
+        return if (orchestrator.speechModelManager.pipelineReady(src, tgt)) {
+            "\nOffline translation ready"
+        } else {
+            "\nRequired offline models missing — Open MODELS"
+        }
     }
 
     // ---------------- Status rendering ----------------
@@ -562,6 +641,18 @@ class MainActivity : AppCompatActivity() {
                 binding.tvStatusText.setTextColor(amber)
                 binding.tvLastSttText.text = getString(R.string.processing_voice)
                 tintRadar(amber, true)
+            }
+            TransceiverState.TRANSLATING -> {
+                binding.tvStatusText.text = getString(R.string.translating)
+                binding.tvStatusText.setTextColor(amber)
+                binding.tvLastSttText.text = getString(R.string.translating)
+                tintRadar(amber, true)
+            }
+            TransceiverState.TRANSLATION_FAILED -> {
+                binding.tvStatusText.text = getString(R.string.translation_failed)
+                binding.tvStatusText.setTextColor(red)
+                binding.tvLastSttText.text = getString(R.string.translation_unavailable)
+                tintRadar(red, false)
             }
             TransceiverState.TRANSMITTING -> {
                 binding.tvStatusText.text = getString(R.string.transmitting)

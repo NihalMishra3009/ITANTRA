@@ -20,8 +20,11 @@ class ModelStorageManager(private val context: Context) {
 
     fun sttDir(lang: String): File = File(modelsDir, "stt/${lang.lowercase()}")
     fun ttsDir(lang: String): File = File(modelsDir, "tts/${lang.lowercase()}")
+    fun translationDir(pairKey: String): File = File(modelsDir, "translation/${pairKey.lowercase()}")
     fun roleDir(role: ModelRole, lang: String): File =
-        if (role == ModelRole.STT) sttDir(lang) else ttsDir(lang)
+        if (role == ModelRole.STT) sttDir(lang)
+        else if (role == ModelRole.TRANSLATION) translationDir(lang)
+        else ttsDir(lang)
 
     fun tmpDir(role: ModelRole, lang: String): File = File(roleDir(role, lang), TMP_DIR)
 
@@ -88,6 +91,14 @@ class ModelStorageManager(private val context: Context) {
     fun installedStt(): Map<String, Long> = installedLanguages(ModelRole.STT)
     /** Every installed TTS language + its measured size (bytes). */
     fun installedTts(): Map<String, Long> = installedLanguages(ModelRole.TTS)
+    /** Every installed translation pair + its measured size (bytes). */
+    fun installedTranslation(): Map<String, Long> {
+        val base = File(modelsDir, "translation")
+        if (!base.exists()) return emptyMap()
+        return base.listFiles()
+            ?.filter { it.isDirectory && isInstalled(ModelRole.TRANSLATION, it.name) }
+            ?.associate { it.name to sizeBytes(ModelRole.TRANSLATION, it.name) } ?: emptyMap()
+    }
 
     private fun installedLanguages(role: ModelRole): Map<String, Long> {
         val base = if (role == ModelRole.STT) File(modelsDir, "stt") else File(modelsDir, "tts")
@@ -98,7 +109,8 @@ class ModelStorageManager(private val context: Context) {
     }
 
     /** Total installed model storage across all roles (bytes). */
-    fun totalInstalledBytes(): Long = installedStt().values.sum() + installedTts().values.sum()
+    fun totalInstalledBytes(): Long =
+        installedStt().values.sum() + installedTts().values.sum() + installedTranslation().values.sum()
 
     /** Delete a single STT or TTS pack. Returns true if removed. */
     fun deletePack(role: ModelRole, lang: String): Boolean {

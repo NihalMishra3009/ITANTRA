@@ -51,6 +51,30 @@ data class Neighbor(
  * Does NOT broadcast private contact lists. Only minimal routing metadata
  * (node ID, role, capabilities, route info) is shared.
  */
+
+// ---------------------------------------------------------------------------
+// Peer capability advertisement (cross-language).
+// Compact capability string (single field inside hello/announce text):
+//   "STT:hi,en TTS:hi,en MT:hi-en,en-hi"
+// Capabilities reflect ACTUALLY INSTALLED models only — never advertised by
+// declared-but-missing packs.
+// ---------------------------------------------------------------------------
+object CapabilityFormat {
+    fun build(stt: Set<String>, tts: Set<String>, mt: Set<String>): String =
+        "STT:${stt.sorted().joinToString(",")} TTS:${tts.sorted().joinToString(",")} " +
+        "MT:${mt.sorted().joinToString(",")}"
+
+    /** Parse the MT:... section from a hello/announce text. */
+    fun parseMtPairs(text: String): Set<String> =
+        Regex("MT:([\\w,-]+)").find(text)?.groupValues?.get(1)
+            ?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+
+    /** Parse the TTS:... section from a hello/announce text. */
+    fun parseTtsLanguages(text: String): Set<String> =
+        Regex("TTS:([\\w,-]+)").find(text)?.groupValues?.get(1)
+            ?.split(",")?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+}
+
 class NetworkDiscoveryManager(
     val myNodeId: String,
     private val capabilities: String = "STT/TTS/RELAY",
@@ -121,13 +145,13 @@ class NetworkDiscoveryManager(
     }
 
     /** Build a NODE_HELLO packet advertising this node. */
-    fun buildHello(role: String, displayName: String): TextPacket {
+    fun buildHello(role: String, displayName: String, capOverride: String? = null): TextPacket {
         return TextPacket(
             senderId = myNodeId,
             recipientId = "*",
             type = PacketType.NODE_HELLO,
             language = "en",
-            text = "${displayName}|$role|$capabilities",
+            text = "${displayName}|$role|${capOverride ?: capabilities}",
             ttlMs = HELLO_TTL_MS,
             maxHops = 1
         )
@@ -320,7 +344,7 @@ class NetworkDiscoveryManager(
     }
 
     /** Build the periodic NODE_ANNOUNCE that also carries a snapshot of my routes. */
-    fun buildAnnounce(role: String, displayName: String): TextPacket {
+    fun buildAnnounce(role: String, displayName: String, capOverride: String? = null): TextPacket {
         val routeSnapshot = bestRoutesSnapshot().take(8)
             .joinToString(";") { "${it.destinationId}:${it.nextHopId}:${it.hopCount}" }
         return TextPacket(
@@ -328,7 +352,7 @@ class NetworkDiscoveryManager(
             recipientId = "*",
             type = PacketType.NODE_ANNOUNCE,
             language = "en",
-            text = "${displayName}|$role|$capabilities|ROUTES:${routeSnapshot}",
+            text = "${displayName}|$role|${capOverride ?: capabilities}|ROUTES:${routeSnapshot}",
             ttlMs = HELLO_TTL_MS,
             maxHops = 1
         )

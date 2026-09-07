@@ -59,7 +59,7 @@ class ModelDistributionManager(
             if (File(dir, "tokens.txt").exists() && dir.listFiles { f ->
                     f.isFile && f.name.endsWith(".onnx", ignoreCase = true)
                 }?.isNotEmpty() == true) PackStatus.INSTALLED else PackStatus.NOT_INSTALLED
-        } else if (storage.isInstalled(pack.role, pack.language.code)) PackStatus.INSTALLED
+        } else if (storage.isInstalled(pack.role, pack.storageKey)) PackStatus.INSTALLED
         else PackStatus.NOT_INSTALLED
     }
 
@@ -71,8 +71,8 @@ class ModelDistributionManager(
 
     /** Installed pack actual size (measured from filesystem). */
     fun installedSize(pack: LanguageModelPack): Long =
-        if (storage.isInstalled(pack.role, pack.language.code))
-            storage.sizeBytes(pack.role, pack.language.code) else 0
+        if (storage.isInstalled(pack.role, pack.storageKey))
+            storage.sizeBytes(pack.role, pack.storageKey) else 0
 
     /** Model files present on disk for a (role, lang) — empty when not installed. */
     fun installedModels(lang: String, role: ModelRole): List<File> =
@@ -99,7 +99,7 @@ class ModelDistributionManager(
             )))
             return
         }
-        val lang = pack.language.code.lowercase()
+        val lang = pack.storageKey.lowercase()
         // Both language and engine packs stage into .staging/... and only publish
         // into the live dir after validation (never expose a partial model).
         val stagingDir = if (pack.isEngine) File(storage.modelsDir, ModelStorageManager.STAGING_DIR + "/engine/" + pack.id)
@@ -413,9 +413,9 @@ class ModelDistributionManager(
     /** Delete an installed pack (STT and TTS independent, engine packs too). */
     fun deletePack(pack: LanguageModelPack): Boolean {
         val ok = if (pack.isEngine) engineDir(pack).deleteRecursively()
-        else storage.deletePack(pack.role, pack.language.code)
+        else storage.deletePack(pack.role, pack.storageKey)
         // Also discard any stale staging for this pack.
-        val lang = pack.language.code.lowercase()
+        val lang = pack.storageKey.lowercase()
         val stage = if (pack.isEngine) File(storage.modelsDir, ModelStorageManager.STAGING_DIR + "/engine/" + pack.id)
         else storage.stagingDir(pack.role, lang)
         try { if (stage.exists()) stage.deleteRecursively() } catch (_: Exception) {}

@@ -74,11 +74,65 @@ class LanguageModelsActivity : AppCompatActivity() {
             smm.enginePacks().forEach { binding.container.addView(engineCard(it)) }
         }
 
+        binding.container.addView(translationPairsSection())
+
         orderedLanguagePacks()
             .filter { matchesTab(it) }
             .forEach { binding.container.addView(languageCard(it)) }
 
         renderStorage()
+    }
+
+    /** Offline translation pairs (Opus-MT hi↔en): honest install state, no fake download. */
+    private fun translationPairsSection(): LinearLayout {
+        val section = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = getDrawableCompat(R.drawable.bg_card)
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = dp(14) }
+            setPadding(dp(14), dp(14), dp(14), dp(12))
+        }
+        section.addView(TextView(this).apply {
+            text = "OFFLINE TRANSLATION PAIRS"
+            setTextColor(getColor(R.color.text_white))
+            textSize = 13f
+            setTypeface(typeface, android.graphics.Typeface.BOLD)
+        })
+        section.addView(TextView(this).apply {
+            text = "Helsinki-NLP Opus-MT (ONNX, Apache-2.0) — fully offline after install."
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 11f
+            setPadding(0, 2, 0, 0)
+        })
+
+        for (pack in com.itantra.speech.ModelCatalog.translationPacks()) {
+            val status = smm.distributionManager().status(pack)
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, dp(8), 0, 0)
+            }
+            row.addView(TextView(this).apply {
+                text = "${pack.language.nativeName} → ${pack.targetLanguage?.displayName ?: "?"}"
+                setTextColor(getColor(R.color.text_white))
+                textSize = 13f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            })
+            val label = when (status) {
+                PackStatus.INSTALLED, PackStatus.LOADED -> "✓ INSTALLED"
+                else -> "REQUIRES MODEL FILES"
+            }
+            row.addView(TextView(this).apply {
+                text = label
+                setTextColor(getColor(if (status == PackStatus.INSTALLED || status == PackStatus.LOADED) R.color.comm_green else R.color.comm_amber))
+                textSize = 11f
+                setTypeface(typeface, android.graphics.Typeface.BOLD)
+            })
+            section.addView(row)
+        }
+        return section
     }
 
     private fun engineVisible(): Boolean = when (activeTab) {

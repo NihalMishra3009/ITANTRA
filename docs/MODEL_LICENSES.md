@@ -21,10 +21,21 @@ Licenses for models referenced by the repository. Publicly downloadable does not
 | Mimic3 gu_IN-cmu-indic (low) | Gujarati | **CC-BY-NC 4.0** | **Yes** | Non-commercial; flagged in Models UI |
 | Meta MMS-TTS (mr/kn/ta/te/or) | Marathi/Kannada/Tamil/Telugu/Odia | **CC-BY-NC 4.0** | **Yes** | Non-commercial; hosted on iTantra release, SHA-256 verified |
 
+## Offline Neural Translation (cross-language)
+
+| Model | Pair | License | Runtime | Notes |
+|-------|------|---------|---------|-------|
+| Helsinki-NLP Opus-MT | hi ↔ en | **Apache-2.0** (open-source approved) | ONNX Runtime (bundled libonnxruntime.so) | Converted via model-conversion/convert_opus_mt_onnx.py → model.onnx + tokens.txt under models/translation/hi-en/ and en-hi/. Operator hosts the converted artifact; downloadUrl + SHA-256 are pinned once a verified build exists. |
+
+Translation happens **sender-side, before encryption** — the wire carries only the
+final target-language compact text. Relay nodes never require a translation (or
+speech) model. SOS/emergency traffic never passes through translation.
+
 **Important:** CC-BY-NC (NonCommercial) voices are available for the offline demo and are
 installed/downloaded as regular packs, but they are **not open-source-approved** per the
 project's license rule. They are flagged with a `⚠` license badge in the Models screen and
-documented in the language card notes as NON-COMMERCIAL.
+documented in the language card notes as NON-COMMERCIAL. The Opus-MT translation model is
+Apache-2.0 and fully open-source approved.
 
 ## Candidate Models (declared in catalog, NOT runtime assets)
 

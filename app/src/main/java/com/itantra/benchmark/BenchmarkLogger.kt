@@ -9,6 +9,7 @@ data class LatencyRecord(
     val isAlert: Boolean,
     val speechDurationMs: Long,
     val sttLatencyMs: Long,
+    val translationLatencyMs: Long,
     val transportLatencyMs: Long,
     val ttsLatencyMs: Long,
     val playbackLatencyMs: Long,
@@ -19,8 +20,8 @@ data class LatencyRecord(
 ) {
     /** True when at least one real measurement exists (not all-zero fabricated). */
     fun hasAnyMeasurement(): Boolean =
-        speechDurationMs > 0 || sttLatencyMs > 0 || transportLatencyMs > 0 ||
-        ttsLatencyMs > 0 || playbackLatencyMs > 0 || totalE2eLatencyMs > 0 || rtf > 0f
+        speechDurationMs > 0 || sttLatencyMs > 0 || translationLatencyMs > 0 ||
+        transportLatencyMs > 0 || ttsLatencyMs > 0 || playbackLatencyMs > 0 || totalE2eLatencyMs > 0 || rtf > 0f
 }
 
 /**
@@ -59,6 +60,7 @@ object BenchmarkLogger {
         tTtsStart: Long,
         tTtsEnd: Long,
         tPlayStart: Long,
+        translationLatencyMs: Long = 0L,
         packetBytes: Int = 0,
         jsonPacketBytes: Int = 0
     ): LatencyRecord {
@@ -77,6 +79,7 @@ object BenchmarkLogger {
             isAlert = isAlert,
             speechDurationMs = speechDuration,
             sttLatencyMs = sttLatency,
+            translationLatencyMs = translationLatencyMs,
             transportLatencyMs = transportLatency,
             ttsLatencyMs = ttsLatency,
             playbackLatencyMs = playbackLatency,
@@ -94,6 +97,7 @@ object BenchmarkLogger {
         Log.i(TAG, "Language: $language | Alert: $isAlert")
         Log.i(TAG, "Speech Duration: ${speechDuration}ms")
         Log.i(TAG, "STT Latency: ${sttLatency}ms (RTF: ${String.format("%.3f", rtf)})")
+        if (translationLatencyMs > 0) Log.i(TAG, "Translation Latency: ${translationLatencyMs}ms")
         Log.i(TAG, "Transport Latency: ${transportLatency}ms")
         Log.i(TAG, "TTS Latency: ${ttsLatency}ms")
         Log.i(TAG, "Playback Latency: ${playbackLatency}ms")
@@ -110,6 +114,13 @@ object BenchmarkLogger {
         synchronized(packetSizes) {
             packetSizes.add(PacketSizeRecord(language, textBytes, binaryBytes, jsonBytes))
         }
+    }
+
+    /** Cross-language packet-size comparison: real source vs translated text vs wire. */
+    fun logTranslationPacketSize(language: String, sourceText: String, targetText: String, packetBytes: Int) {
+        val src = sourceText.toByteArray(Charsets.UTF_8).size
+        val tgt = targetText.toByteArray(Charsets.UTF_8).size
+        Log.i(TAG, "CROSS-LANG [$language] source=$src B → translated=$tgt B → wire packet=$packetBytes B")
     }
 
     fun getRecords(): List<LatencyRecord> {

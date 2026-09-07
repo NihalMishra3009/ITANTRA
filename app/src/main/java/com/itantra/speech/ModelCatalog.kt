@@ -1,6 +1,7 @@
 package com.itantra.speech
 
 import com.itantra.stt.SupportedLanguage
+import com.itantra.translation.TranslationCatalog
 
 /**
  * Catalog of officially supported model packs for iTantra.
@@ -285,4 +286,52 @@ object ModelCatalog {
             isEngine = false
         )
     }
+
+    // ------------------------------------------------------------------
+    // Offline neural translation packs (Helsinki-NLP Opus-MT, Apache-2.0).
+    // A pack stores under models/translation/{src}-{tgt}/ with model.onnx +
+    // tokens.txt. downloadUrl stays null until an operator hosts a converted,
+    // verified model — the engine is genuinely runnable once those files exist,
+    // and we never fabricate a download source/checksum.
+    // ------------------------------------------------------------------
+
+    /** Genuine supported translation pairs (directed). */
+    private val translationPairs: List<Pair<SupportedLanguage, SupportedLanguage>> =
+        listOf(
+            SupportedLanguage.HINDI to SupportedLanguage.ENGLISH,
+            SupportedLanguage.ENGLISH to SupportedLanguage.HINDI
+        ).filter { (s, t) -> TranslationCatalog.supports(s.code, t.code) }
+
+    /** Offline neural translation model packs (role TRANSLATION). */
+    fun translationPacks(): List<LanguageModelPack> =
+        translationPairs.map { (src, tgt) ->
+            LanguageModelPack(
+                id = "mt_${src.code}_${tgt.code}",
+                language = src,
+                role = ModelRole.TRANSLATION,
+                modelName = "Opus-MT ${src.displayName}→${tgt.displayName} (ONNX)",
+                version = "opus-mt-2024",
+                sizeBytes = 0L, // operator-provided model size; not fabricated
+                checksumSha256 = "", // pinned once the converted artifact is hosted+verified
+                license = "Apache-2.0 (Helsinki-NLP Opus-MT; conversion via Marian + SentencePiece)",
+                runtime = Mlruntime.ONNX_MT,
+                quantization = Quantization.FP32,
+                sampleRate = 0,
+                supportedDeviceClass = DeviceClass.MID,
+                downloadUrl = null, // no hosted converted artifact yet — honest
+                isArchive = false,
+                isMultilingualShared = false,
+                supportsLanguage = true,
+                notes = "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires model.onnx + tokens.txt under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet.",
+                isEngine = false,
+                targetLanguage = tgt
+            )
+        }
+
+    /** Translation pack for a specific directed pair, or null. */
+    fun translationPack(source: SupportedLanguage, target: SupportedLanguage): LanguageModelPack? =
+        translationPacks().firstOrNull { it.language == source && it.targetLanguage == target }
 }
+
+/** Model packs for the offline translation role (existing API surface). */
+fun ModelCatalog.allTranslationPacks(): List<LanguageModelPack> = ModelCatalog.translationPacks()

@@ -34,7 +34,8 @@ class SpeechModelManager(
     context: Context,
     private val sttEngine: SttEngine? = null,
     private val ttsEngine: TtsEngine? = null,
-    private val vadEngine: VadEngine? = null
+    private val vadEngine: VadEngine? = null,
+    translationEngine: com.itantra.translation.TranslationEngine? = null
 ) {
     companion object {
         private const val TAG = "SpeechModelManager"
@@ -48,6 +49,10 @@ class SpeechModelManager(
     }
 
     private val appContext = context.applicationContext
+
+    /** Offline neural translation engine (Opus-MT via ONNX Runtime) — null-safe. */
+    val translationEngine: com.itantra.translation.TranslationEngine? =
+        translationEngine ?: com.itantra.translation.OpusMtTranslationEngine(appContext)
 
     /** Wire catalog asset checks to the app's asset files (honest availability). */
     private val unbinding = ModelCatalog.bindAssetAccess(
@@ -82,6 +87,68 @@ class SpeechModelManager(
 
     /** Report whether a language's TTS is genuinely available (asset present). */
     fun ttsAvailable(langCode: String): Boolean = registry.isAvailable(langCode, ModelRole.TTS)
+
+    /** True if the offline translation engine supports this directed pair. */
+    fun translationSupported(sourceCode: String, targetCode: String): Boolean =
+        com.itantra.translation.TranslationCatalog.supports(sourceCode, targetCode)
+
+    /** True if the translation pack files for a pair are actually installed. */
+    fun translationInstalled(source: com.itantra.stt.SupportedLanguage, target: com.itantra.stt.SupportedLanguage): Boolean {
+        val key = com.itantra.translation.TranslationEngine.pairId(source, target)
+        return distribution.isInstalled(key, ModelRole.TRANSLATION)
+    }
+
+    /** Translate offline; returns a non-success result (never throws) when unavailable. */
+    fun translate(
+        text: String,
+        sourceCode: String,
+        targetCode: String
+    ): com.itantra.translation.TranslationResult {
+        val engine = translationEngine
+        if (engine == null || !engine.supports(sourceCode, targetCode)) {
+            return com.itantra.translation.TranslationResult.unavailable(sourceCode, targetCode)
+        }
+        return engine.translate(text, sourceCode, targetCode)
+    }
+
+    /**
+     * Full cross-language pipeline readiness for (source → target):
+     * source STT + (translation if source != target) + target TTS all available.
+     */
+    fun pipelineReady(
+        source: com.itantra.stt.SupportedLanguage,
+        target: com.itantra.stt.SupportedLanguage
+    ): Boolean {
+        if (!sttAvailable(source.code)) return false
+        if (source != target) {
+            val pair = ModelCatalog.translationPack(source, target) ?: return false
+            // Honest readiness: the translation engine must genuinely support the pair
+            // AND the pack must be installed (files present).
+            if (!translationSupported(source.code, target.code)) return false
+            if (!translationInstalled(source, target)) return false
+        }
+        return ttsAvailable(target.code)
+    }
+
+    /** List of required-but-missing model packs for a pipeline (for the UI). */
+    fun missingPipelineModels(
+        source: com.itantra.stt.SupportedLanguage,
+        target: com.itantra.stt.SupportedLanguage
+    ): List<LanguageModelPack> {
+        val missing = mutableListOf<LanguageModelPack>()
+        // STT: bundled Whisper is always available (asset present) — not "missing".
+        if (source != target) {
+            val pair = ModelCatalog.translationPack(source, target)
+            if (pair != null && !translationInstalled(source, target) && pair.downloadUrl != null) {
+                missing.add(pair)
+            }
+        }
+        if (!ttsAvailable(target.code)) {
+            val tts = ModelCatalog.ttsPack(target.code)
+            if (tts != null) missing.add(tts)
+        }
+        return missing
+    }
 
     /** Shared engine packs (e.g. downloadable Whisper STT upgrades). */
     fun enginePacks(): List<LanguageModelPack> = ModelCatalog.sttEnginePacks()

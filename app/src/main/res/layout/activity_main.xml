@@ -219,18 +219,55 @@
                     android:alpha="0.15"
                     android:background="@drawable/status_node" />
 
-                <!-- Language dropdown — top-left above PTT -->
-                <Spinner
-                    android:id="@+id/spinnerLanguage"
+                <!-- Language FROM/TO dropdowns — top-left above PTT -->
+                <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_gravity="top|start"
                     android:layout_margin="6dp"
-                    android:background="@drawable/bg_button_rounded"
-                    android:backgroundTint="@color/bg_surface_raised"
-                    android:popupBackground="@drawable/bg_popup"
-                    android:paddingHorizontal="12dp"
-                    android:dropDownVerticalOffset="4dp" />
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="@string/lang_from"
+                        android:textAllCaps="true"
+                        android:textColor="@color/text_faint"
+                        android:textSize="8sp"
+                        android:letterSpacing="0.14" />
+
+                    <Spinner
+                        android:id="@+id/spinnerLanguage"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:background="@drawable/bg_button_rounded"
+                        android:backgroundTint="@color/bg_surface_raised"
+                        android:popupBackground="@drawable/bg_popup"
+                        android:paddingHorizontal="10dp"
+                        android:dropDownVerticalOffset="4dp" />
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="4dp"
+                        android:text="@string/lang_to"
+                        android:textAllCaps="true"
+                        android:textColor="@color/text_faint"
+                        android:textSize="8sp"
+                        android:letterSpacing="0.14" />
+
+                    <Spinner
+                        android:id="@+id/spinnerLanguageTarget"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="2dp"
+                        android:background="@drawable/bg_button_rounded"
+                        android:backgroundTint="@color/bg_surface_raised"
+                        android:popupBackground="@drawable/bg_popup"
+                        android:paddingHorizontal="10dp"
+                        android:dropDownVerticalOffset="4dp" />
+                </LinearLayout>
 
                 <!-- Incoming message circle (history icon) — top-right above PTT -->
                 <FrameLayout

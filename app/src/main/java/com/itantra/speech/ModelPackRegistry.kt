@@ -9,6 +9,7 @@ enum class Mlruntime {
     SHERPA_VITS,      // existing VITS TTS via sherpa-onnx
     SHERPA_KOKORO,    // lightweight Kokoro TTS (placeholder)
     SHERPA_MATCHA,    // Matcha TTS (placeholder)
+    ONNX_MT,          // Helsinki-NLP Opus-MT neural translation via ONNX Runtime
     ENERGY            // energy/fallback (non-ML), e.g. VAD fallback
 }
 
@@ -43,7 +44,7 @@ data class ModelPack(
     val sizeMb: Double get() = sizeBytes / (1024.0 * 1024.0)
 }
 
-enum class ModelRole { STT, TTS, VAD }
+enum class ModelRole { STT, TTS, VAD, TRANSLATION }
 
 /**
  * Language-aware model pack registry.

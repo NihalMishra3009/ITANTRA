@@ -17,6 +17,53 @@ All model assets run locally via ONNX Runtime — **no cloud APIs, no internet**
 
 ---
 
+## 🈯 Cross-Language Communication (Offline)
+
+iTantra supports real-time cross-language walkie-talkie: the sender speaks one
+language, the receiver hears another. Everything runs offline.
+
+```text
+Hindi speaker
+  → Offline Hindi STT   ("आप कहाँ जा रहे हैं?")
+  → Offline HI→EN translation (Opus-MT, ONNX, Apache-2.0)
+  → English text ("Where are you going?")
+  → AES-256-GCM encrypted compact packet (language=en)
+  → Bluetooth / Wi-Fi Direct / mesh relay
+  → English receiver
+  → Offline English TTS  → English speech
+```
+
+Reverse direction (English → Hindi) works the same way.
+
+Key design decisions:
+
+- **source language ≠ target language.** Two explicit concepts
+  (`sourceLanguage` = what you speak; `targetLanguage` = what the receiver hears).
+  Home UI shows **FROM / TO**; SAME-LANGUAGE MODE is the default and skips
+  translation entirely (zero added latency).
+- **Sender-side translation, before encryption.** The wire carries ONLY the final
+  target-language compact text (the SIH advantage: speech → compact text on air).
+  Relay nodes forward encrypted ciphertext and require **no** STT/TTS/translation
+  models — only endpoint nodes need language models.
+- **`TextPacket.language` = language of the text it carries.** A Hindi→English
+  message travels as `language="en"` + English text. The receiver TTS uses
+  `packet.language`, so a receiver whose spoken language differs still hears the
+  correct target language.
+- **Same-language bypass (hi↔hi, en↔en):** identical to the previous pipeline,
+  no translation invoked, latency unchanged.
+- **Honest failure:** if the offline translation model for a pair is missing, the
+  app never sends untranslated text mislabeled as the target language. PTT is
+  gated with "Required offline models missing — open MODELS"; the UI surfaces
+  `TRANSLATION_FAILED` / "Cross-language unavailable" instead.
+- **SOS is never translated.** Emergency traffic is protocol-level and works with
+  zero translation models.
+- Translation engines are pluggable (`TranslationEngine` interface). The shipped
+  runtime is **Helsinki-NLP Opus-MT** (Apache-2.0) exported to ONNX and executed
+  with the bundled ONNX Runtime. See `model-conversion/convert_opus_mt_onnx.py`
+  and `docs/MODEL_LICENSES.md`. First verified pair: **hi ↔ en** (extensible).
+
+---
+
 ## 🌟 Core Architecture & Pipeline
 
 ```text
@@ -24,25 +71,28 @@ USER SPEAKS
       ↓
 MICROPHONE (16kHz 16-bit Mono PCM, 32ms chunks)
       ↓
-SILERO VAD (sherpa-onnx / ONNX Runtime) + sentence endpointing
+ENERGY-ADAPTIVE VAD (noise floor, hangover) + sentence endpointing
       ↓
-OPENAI WHISPER base int8 MULTILINGUAL STT (all 10 languages, ONNX)
+OPENAI WHISPER base int8 MULTILINGUAL STT (source language, ONNX)
       ↓
 INDICTEXTNORMALIZER (Unicode NFC, Indic punctuation cleanup)
       ↓
-STREAMING PARTIAL + SENTENCE ENDPOINTING
+[OFFLINE TRANSLATION — only when source != target]
+      Opus-MT HI↔EN (ONNX, Apache-2.0) → packet text = target language
+      ↓  (same-language mode skips this entirely)
+PACKET (TextPacket.language = language of transmitted text)
       ↓
-MESSAGESECURITYMANAGER (AEAD AES-256-GCM, ECDH P-256 session handshake)
+HOP-LEVEL SECURITY (per-peer AES-256-GCM + HMAC, ECDH P-256)
       ↓
-COMPACT BINARY PACKET (BinaryPacketCodec: 28B header + HMAC-SHA256 auth)
+COMPACT BINARY PACKET (BinaryPacketCodec v4 header + auth)
       ↓
 OFFLINE RADIO TRANSPORT (Bluetooth RFCOMM / Wi-Fi Direct — real group-owner IP)
       ↓  (Persistent Room outbox, ACK, retry, emergency priority, multi-hop relay)
-RECEIVER DESTINATION NODE
+RECEIVER DESTINATION NODE (or relay — relay needs NO language models)
       ↓
-MESSAGESECURITYMANAGER (AEAD decryption)
+AUTHENTICATED DECRYPTION
       ↓
-VITS / PIPER NEURAL TTS (ONNX via sherpa-onnx OfflineTts)
+VITS / PIPER NEURAL TTS (language = packet.language)
       ↓
 SPEAKER AUDIO PLAYBACK (AudioTrack; alert uses alarm stream + audio focus)
 ```
