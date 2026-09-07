@@ -328,7 +328,7 @@ class PipelineOrchestrator(
         isAlertNext = isAlert
         speechAudioBuffer.clear()
         vadEngine.reset()
-        speechStartTimestamp = System.currentTimeMillis()
+        speechStartTimestamp = BenchmarkLogger.nowMs()
 
         _transceiverState.value = TransceiverState.LISTENING
         audioRecorder.startRecording(coroutineScope)
@@ -386,7 +386,7 @@ class PipelineOrchestrator(
     fun onPttReleased() {
         if (!isPttHeld) return
         isPttHeld = false
-        speechEndTimestamp = System.currentTimeMillis()
+        speechEndTimestamp = BenchmarkLogger.nowMs()
         audioRecorder.stopRecording()
 
         finalizeUtteranceAndSend()
@@ -404,7 +404,7 @@ class PipelineOrchestrator(
         }
 
         if (speechEndTimestamp <= speechStartTimestamp) {
-            speechEndTimestamp = System.currentTimeMillis()
+            speechEndTimestamp = BenchmarkLogger.nowMs()
         }
 
         coroutineScope.launch {
@@ -431,10 +431,10 @@ class PipelineOrchestrator(
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
                 // Loopback / Standalone single phone test or offline outbox store
                 Log.i(TAG, "Dispatching packet via loopback / local pipeline")
-                handleIncomingPacket(packet, tSpeechStart = speechStartTimestamp, tSpeechEnd = speechEndTimestamp, tSttStart = tSttStart, tSttEnd = tSttEnd, tSend = System.currentTimeMillis())
+                handleIncomingPacket(packet, tSpeechStart = speechStartTimestamp, tSpeechEnd = speechEndTimestamp, tSttStart = tSttStart, tSttEnd = tSttEnd, tSend = BenchmarkLogger.nowMs())
             } else {
                 _transceiverState.value = TransceiverState.TRANSMITTING
-                val tSend = System.currentTimeMillis()
+                val tSend = BenchmarkLogger.nowMs()
 
                 // Measure real on-wire packet size (binary vs equivalent JSON) using a
                 // hop-encrypted packet so the size reflects the authenticated wire form.
@@ -475,7 +475,7 @@ class PipelineOrchestrator(
             )
 
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
-                handleIncomingPacket(packet, tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L, tSend = System.currentTimeMillis())
+                handleIncomingPacket(packet, tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L, tSend = BenchmarkLogger.nowMs())
             } else {
                 meshRoutingManager?.sendReliablePacket(packet) { ack ->
                     Log.i(TAG, "Direct text message ${packet.messageId} ACK=$ack")
@@ -575,7 +575,7 @@ class PipelineOrchestrator(
         tSend: Long = 0L
     ) {
         coroutineScope.launch {
-            val tReceive = System.currentTimeMillis()
+            val tReceive = BenchmarkLogger.nowMs()
             _transceiverState.value = TransceiverState.RECEIVING
 
             // Emergency recognition (dedicated path — no mic, no STT required).
@@ -593,17 +593,17 @@ class PipelineOrchestrator(
             }
 
             _transceiverState.value = TransceiverState.SYNTHESIZING
-            val tTtsStart = System.currentTimeMillis()
+            val tTtsStart = BenchmarkLogger.nowMs()
             val ttsResult = speechModelManager.synthesize(text = packet.text, langCode = packet.language, isAlert = packet.isAlert)
-            val tTtsEnd = System.currentTimeMillis()
+            val tTtsEnd = BenchmarkLogger.nowMs()
 
             _transceiverState.value = TransceiverState.PLAYING
-            var tPlayStart = System.currentTimeMillis()
+            var tPlayStart = BenchmarkLogger.nowMs()
 
             if (ttsResult.pcmAudio.isEmpty()) {
                 Log.w(TAG, "TTS produced empty audio for '${packet.language}' — speech playback cannot start. " +
                         "No genuine TTS model available for this language.")
-                tPlayStart = System.currentTimeMillis()
+                tPlayStart = BenchmarkLogger.nowMs()
             } else {
                 audioFocusManager.requestFocus(packet.isAlert)
                 try {
@@ -612,7 +612,7 @@ class PipelineOrchestrator(
                         sampleRate = ttsResult.sampleRate,
                         isAlert = packet.isAlert,
                         onPlaybackStarted = {
-                            tPlayStart = System.currentTimeMillis()
+                            tPlayStart = BenchmarkLogger.nowMs()
                         }
                     )
                 } finally {
@@ -621,29 +621,32 @@ class PipelineOrchestrator(
             }
             _transceiverState.value = TransceiverState.IDLE
 
-            // Telemetry & Benchmark logging
-            val speechStart = if (tSpeechStart > 0) tSpeechStart else packet.timestamp - 1500
-            val speechEnd = if (tSpeechEnd > 0) tSpeechEnd else packet.timestamp
-            val sttStart = if (tSttStart > 0) tSttStart else packet.timestamp
-            val sttEnd = if (tSttEnd > 0) tSttEnd else packet.timestamp + 250
-            val sendTime = if (tSend > 0) tSend else packet.timestamp + 260
-
+            // Telemetry & Benchmark logging — NO fabricated timestamps.
+            // Values only appear when they were actually measured. End-to-end across
+            // two phones uses each device's local clock (packet.timestamp is sender
+            // wall-clock), which the full pipeline reconstructs; local segments
+            // (STT, TTS, playback) use the monotonic clock.
             val record = BenchmarkLogger.logInteraction(
                 messageId = packet.messageId,
                 language = packet.language,
                 isAlert = packet.isAlert,
-                tSpeechStart = speechStart,
-                tSpeechEnd = speechEnd,
-                tSttStart = sttStart,
-                tSttEnd = sttEnd,
-                tSend = sendTime,
+                tSpeechStart = tSpeechStart,
+                tSpeechEnd = tSpeechEnd,
+                tSttStart = tSttStart,
+                tSttEnd = tSttEnd,
+                tSend = tSend,
                 tReceive = tReceive,
                 tTtsStart = tTtsStart,
                 tTtsEnd = tTtsEnd,
                 tPlayStart = tPlayStart
             )
-
-            _lastLatencyMetrics.value = record
+            // Only surface a latency record to the UI if it contains at least one
+            // real measurement (never show a fabricated 0ms E2E).
+            if (record.hasAnyMeasurement()) {
+                _lastLatencyMetrics.value = record
+            } else {
+                _lastLatencyMetrics.value = null
+            }
         }
     }
 
@@ -655,5 +658,26 @@ class PipelineOrchestrator(
     fun stopContinuousListening() {
         operatingMode = OperatingMode.PUSH_TO_TALK
         onPttReleased()
+    }
+
+    private val released = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    /**
+     * Clean shutdown: cancels the orchestration coroutine scope, queue worker,
+     * discovery advertising, topology poller, mesh routing and transport listeners.
+     * Called from activity onDestroy / app shutdown. Does NOT tear down the model
+     * engines (they are lazy + shared) — only stops active background work.
+     */
+    fun release() {
+        if (!released.compareAndSet(false, true)) return
+        Log.i(TAG, "PipelineOrchestrator.release(): cancelling background jobs")
+        try { coroutineScope.cancel() } catch (_: Exception) {}
+        try { meshRoutingManager?.release() } catch (_: Exception) {}
+        try { transport?.disconnect() } catch (_: Exception) {}
+        // Release the shared STT/TTS native engines so no native handle outlives the
+        // process usage. (Idempotent — each engine release() is guarded.)
+        try { sttEngine.release() } catch (_: Exception) {}
+        try { ttsEngine.release() } catch (_: Exception) {}
+        try { vadEngine.release() } catch (_: Exception) {}
     }
 }

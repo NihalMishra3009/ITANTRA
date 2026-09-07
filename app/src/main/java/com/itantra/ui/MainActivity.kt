@@ -667,6 +667,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        // Cancel orchestration coroutines (discovery, poller, queue worker, scope).
+        try { orchestrator.release() } catch (_: Exception) {}
         audioRecorder.stopRecording()
         audioPlayer.stop()
         vadEngine.release()

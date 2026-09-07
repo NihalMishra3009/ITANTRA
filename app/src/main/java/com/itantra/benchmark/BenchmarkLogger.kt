@@ -16,7 +16,12 @@ data class LatencyRecord(
     val rtf: Float,
     val packetBytes: Int = 0,
     val jsonPacketBytes: Int = 0
-)
+) {
+    /** True when at least one real measurement exists (not all-zero fabricated). */
+    fun hasAnyMeasurement(): Boolean =
+        speechDurationMs > 0 || sttLatencyMs > 0 || transportLatencyMs > 0 ||
+        ttsLatencyMs > 0 || playbackLatencyMs > 0 || totalE2eLatencyMs > 0 || rtf > 0f
+}
 
 /**
  * Low-bitrate comparison: actual on-wire binary packet vs equivalent JSON.
