@@ -7,6 +7,7 @@ package com.itantra.security
  */
 object Base64Codec {
 
+    @Suppress("NewApi") // java.util.Base64 is runtime-guarded (API 26+) — Android 24/25 fallback is safe.
     fun encode(data: ByteArray): String {
         return try {
             val j = Class.forName("java.util.Base64")
@@ -20,6 +21,7 @@ object Base64Codec {
         }
     }
 
+    @Suppress("NewApi")
     fun decode(str: String): ByteArray {
         return try {
             val j = Class.forName("java.util.Base64")

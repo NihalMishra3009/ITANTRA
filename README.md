@@ -4,12 +4,12 @@
 [![Android Build](https://img.shields.io/badge/Android-Gradle%20Build%20PASS-brightgreen.svg)]()
 [![Inference](https://img.shields.io/badge/On--Device-100%25%20Offline-blue.svg)]()
 [![STT](https://img.shields.io/badge/STT-Whisper%20base%20int8-purple.svg)]()
-[![TTS](https://img.shields.io/badge/TTS-VITS%20ONNX-purple.svg)]()
-[![VAD](https://img.shields.io/badge/VAD-Silero-blue.svg)]()
-[![Security](https://img.shields.io/badge/Payload-AES--256--GCM%20%2B%20ECDH-red.svg)]()
-[![Protocol](https://img.shields.io/badge/Protocol-Compact%20Binary-teal.svg)]()
+[![TTS](https://img.shields.io/badge/TTS-VITS%20Piper%2FCoqui%2FMMS-purple.svg)]()
+[![VAD](https://img.shields.io/badge/VAD-Energy%20Adaptive%20Fallback-grey.svg)]()
+[![Security](https://img.shields.io/badge/Security-Hop--Level%20AEAD%20ECDH-red.svg)]()
+[![Protocol](https://img.shields.io/badge/Protocol-v4%20Binary%20Wire-teal.svg)]()
 [![Languages](https://img.shields.io/badge/Languages-10%20Indian%20Languages-orange.svg)]()
-[![License](https://img.shields.io/badge/License-MIT%20%2F%20Apache%202.0-green.svg)]()
+[![License](https://img.shields.io/badge/License-MIT%20%2FApache--2.0-green.svg)]()
 
 **iTantra** is a fully offline, peer-to-peer multilingual neural transceiver engineered for disaster response teams, deep-space simulation habitats, remote field expeditions, and cellular/satellite-denied environments. It captures audio from the microphone, applies on-device Voice Activity Detection (VAD) and **OpenAI Whisper multilingual Speech-to-Text (STT) via sherpa-onnx / ONNX Runtime**, encrypts the payload with **AEAD AES-256-GCM** derived from an **ECDH P-256 session handshake**, transmits compact binary packets over **Bluetooth RFCOMM / Wi-Fi Direct** with a **persistent Room store-and-forward outbox**, and synthesizes speech on receiver devices using **VITS neural Text-to-Speech**.
 
@@ -62,26 +62,32 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
 - **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
 - **10 Indian Languages — STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
 - **Downloadable TTS Voice Packs (offline after install)**:
-  - Verified downloadable voices exist for **all 10 languages**: Hindi, English, Malayalam, Gujarati and Bengali (Piper/VITS + Mimic-3/Coqui) plus Marathi, Kannada, Tamil, Telugu, Odia (Meta MMS-TTS converted to sherpa-onnx VITS, hosted on the iTantra release, SHA-256 verified).
+  - Verified downloadable voices exist for **all 10 languages**:
+    - **Open-source (MIT/CC-BY):** Hindi, English, Malayalam (Piper VITS), Bengali (Coqui TTS)
+    - **Restricted non-commercial (CC-BY-NC):** Gujarati (Mimic3), Marathi/Kannada/Tamil/Telugu/Odia (Meta MMS-TTS converted to sherpa-onnx VITS, hosted on the iTantra release, SHA-256 verified). License restrictions are displayed honestly in the Models UI.
   - Bengali VITS (`vits_bn`) is still bundled in the APK as a zero-download fallback.
   - **IndicConformer / IndicF5 are NOT runtime dependencies** of this prototype (their published checkpoints are not directly loadable through the current Android pipeline).
 - **Real Model Inference (ONNX Runtime)**:
-  - **VAD**: Silero VAD (v5/v6 compatible via sherpa-onnx).
+  - **VAD**: Energy-based adaptive VAD with noise-floor tracking, minimum speech duration, hangover, and clipping detection. Clearly reported as "Energy fallback" — not neural VAD.
   - **STT**: OpenAI Whisper base int8 (encoder + decoder ONNX).
   - **TTS**: VITS neural models (per-language `model.onnx` + `tokens.txt`).
   - No fake/placeholder models; every `.onnx` is a genuine trained binary.
-- **Modern Transport Security**:
-  - **AEAD AES-256-GCM** per-payload (confidentiality + integrity + authentication + replay protection).
-  - **ECDH P-256** ephemeral key agreement + **HKDF-SHA256** to derive a shared session key between two phones.
-  - No hard-coded secrets.
-- **Compact Binary Protocol**: `BinaryPacketCodec` (v3) replaces JSON on the wire — sender/recipient node IDs + HMAC-SHA256 auth, dramatically smaller than JSON, ideal for low-bitrate links.
+- **Per-Hop Wire Security (honest trust model)**:
+  - **Hop-level AES-256-GCM + HMAC-SHA256**: each radio link is authenticated and encrypted with the immediate peer's session key (ECDH P-256 + HKDF-SHA256 derived via `PeerSessionManager`). No global shared key exists.
+  - **Relay model (A→R1→B)**: A encrypts with key(A-R1), R1 decrypts+verifies, then re-encrypts with key(R1-B) for B. Routing metadata (sender/recipient/hops) travels unencrypted in the binary header; payload is per-hop encrypted.
+  - Bootstrap `SESSION_START` packets carry public keys and are sent without authentication (`FLAG_UNAUTH`) since no shared key exists yet.
+  - **Per-peer replay protection** (`ReplayProtection`): bounded per-peer cache with TTL + clock-skew guard. Destination duplicates re-ACK (lost-ACK recovery) without re-delivering. `messageId` retransmission through relays bounded by TTL + maxHops.
+  - No hard-coded secrets; no fallback to a global session key.
+- **Compact Binary Protocol**: `BinaryPacketCodec` (v4) replaces JSON on the wire — sender/recipient node IDs + HMAC-SHA256 auth, dramatically smaller than JSON, ideal for low-bitrate links. Authenticated packets without a valid peer key are **rejected**.
 - **Persistent Store-and-Forward**: messages persist in a **Room outbox** that survives app restart; ACK, exponential-backoff retry, duplicate suppression, TTL, multi-hop relay, and emergency priority (emergency bypasses the normal queue).
-- **Dual Radio Transports**: Bluetooth Classic RFCOMM (with full in-range discovery incl. unpaired devices + auto-bonding) and Wi-Fi Direct P2P TCP (with real group-owner IP resolution).
-- **Walking-Talkie & SOS Modes**: Push-To-Talk (PTT), Continuous hands-free, and High-Priority Emergency SOS with audio-focus override.
-- **Real Benchmarking**: monotonic-clock latency capture (STT / transport / TTS / E2E / RTF) and measured binary-vs-JSON packet size.
+- **Dual Radio Transport**: AUTO mode (Bluetooth RFCOMM + Wi-Fi Direct), selectable Bluetooth-only or Wi-Fi Direct-only via the transport selector — the selector **actually drives** the active radios in `CompositeTransport`. Packet size/route/protocol metrics are all real.
+- **Dedicated SOS Emergency Pipeline**: press SOS → immediate emergency packet (no microphone, no STT required) → priority queue → store-and-forward → ACK/retry → receiver synthesizes and plays alert at max volume (volume saved/restored afterward). Visible SOS state: SENDING → DELIVERED / RETRYING / QUEUED_NO_PEER.
+- **Real Benchmarking**: monotonic-clock latency capture (STT / transport / TTS / playback) using `SystemClock.elapsedRealtime()` via `BenchmarkLogger.nowMs()`. Fabricated timestamps eliminated. Remote E2E uses sender wallclock vs receiver wallclock (documented clock skew), local segments monotonic. Null for unknown values, not "0 ms".
 - **DTN Network Layer**: application-level `ITN-XXXXXX` node identity (transport-independent), neighbor discovery (NODE_HELLO/NODE_ANNOUNCE), a real routing table with cost-based next-hop selection (ROUTE_REQUEST/RESPONSE/UPDATE), multi-neighbor relay, and store-carry-forward delivery tracked by a `DeliveryTracker` (QUEUED→STORED→FORWARDING→DELIVERED→ACKNOWLEDGED).
 - **Offline Location & Privacy**: `LocationManager` uses GNSS/Wi-Fi-RTT/BLE-RSSI/relay-anchor sources (never GPS-only), never fabricates coordinates, and advertises coarse, expiry-limited, privacy-preserving positions.
 - **Network Map & Diagnostics**: `NetworkActivity` shows live node identity, neighbors, routing table, verified model capability, delivery status, and latency — all driven by real backend state, no fake nodes.
+- **Atomic Model Installation**: downloads go into `.staging/`, validated (SHA-256 + required files present), then atomically renamed into the live pack directory. Partial/corrupt downloads never expose a broken model as installed. Previous working install preserved on failure.
+- **Lifecycle Robustness**: `PipelineOrchestrator.release()` cancels coroutines, transport listeners, and releases engines on `Activity.onDestroy`. Heavy model loads deferred off the UI thread (`Dispatchers.IO`) to avoid ANRs.
 
 ---
 
