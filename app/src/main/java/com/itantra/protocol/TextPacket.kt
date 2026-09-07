@@ -75,10 +75,8 @@ data class TextPacket(
     val checksum: String = ""
 ) {
 
-    fun withEncryption(sessionKey: ByteArray? = null): TextPacket {
-        if (!MessageSecurityManager.hasSessionKey() && sessionKey == null) {
-            throw SecurityException("No session key established — cannot encrypt")
-        }
+    fun withEncryption(sessionKey: ByteArray): TextPacket {
+        require(sessionKey.size == 32) { "Per-peer session key must be 32 bytes" }
         // Bind the message identity (id + timestamp) as associated data so a
         // replayed/duplicate ciphertext cannot be silently re-authenticated under
         // a different context (replay protection).
@@ -91,8 +89,9 @@ data class TextPacket(
         )
     }
 
-    fun withDecryption(sessionKey: ByteArray? = null): TextPacket {
+    fun withDecryption(sessionKey: ByteArray): TextPacket {
         if (!isEncrypted || encryptedPayload.isBlank()) return this
+        require(sessionKey.size == 32) { "Per-peer session key must be 32 bytes" }
         val aad = replayAad()
         val plain = MessageSecurityManager.decryptPayload(this.encryptedPayload, sessionKey, aad)
         return this.copy(text = plain)

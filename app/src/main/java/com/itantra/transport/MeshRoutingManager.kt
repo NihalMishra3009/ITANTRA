@@ -3,6 +3,7 @@ package com.itantra.transport
 import android.util.Log
 import com.itantra.protocol.PacketType
 import com.itantra.protocol.TextPacket
+import com.itantra.security.ReplayProtection
 import kotlinx.coroutines.*
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedDeque
@@ -40,8 +41,11 @@ class MeshRoutingManager(
     // Outbox: Messages waiting for delivery or ACK (deque allows priority prepend)
     private val outboxQueue = ConcurrentLinkedDeque<QueuedMessage>()
     
-    // Seen messages deduplication cache
-    private val seenMessageIds = ConcurrentHashMap.newKeySet<String>()
+    // Replay protection: per-peer seen-message tracking, bounded + TTL'd.
+    // Rejecting a duplicate stops relay loops and replayed packets. When the
+    // duplicate reaches its DESTINATION, the destination re-ACKs (see below) so a
+    // lost-ACK retransmission still completes instead of being silently dropped.
+    private val replayProtection = ReplayProtection()
 
     // Unacknowledged outbound messages: messageId -> CompletableDeferred<Boolean>
     private val pendingAcks = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
@@ -156,17 +160,6 @@ class MeshRoutingManager(
             return
         }
 
-        // 2. Loop prevention + deduplication: if already processed, stop.
-        //    This prevents R1 → R2 → R1 infinite forwarding loops.
-        if (!seenMessageIds.add(packet.messageId)) {
-            Log.d(TAG, "Duplicate packet ${packet.messageId} ignored (dedup/loop prevention)")
-            return
-        }
-        if (seenMessageIds.size > SEEN_CACHE_MAX_SIZE) {
-            seenMessageIds.clear()
-            seenMessageIds.add(packet.messageId)
-        }
-
         // 3. Handle ACK packets — ACK itself may need multi-hop routing back to origin.
         if (packet.type == PacketType.ACK) {
             val targetMsgId = packet.text.removePrefix("ACK:")
@@ -215,6 +208,23 @@ class MeshRoutingManager(
             Log.i(TAG, "Packet ${packet.messageId} delivered locally to $myNodeId")
             deliveryTracker?.track(packet, DeliveryStatus.DELIVERED, packet.hopCount)
 
+            // Replay protection is enforced at the DESTINATION only. A relay must
+            // pass retransmissions through (the sender's outbox retries the same
+            // messageId), so replays are checked exactly where the packet is
+            // consumed. TTL + hopCount still bound relay/loop behaviour.
+            if (packet.type != PacketType.ACK) {
+                if (!replayProtection.isNew(packet.senderId, packet.messageId, packet.timestamp)) {
+                    // A duplicate that reaches its DESTINATION: re-ACK so a lost-ACK
+                    // retransmission still completes rather than silently dying.
+                    if (packet.recipientId != "*" && !packet.isGroupOrZone) {
+                        Log.i(TAG, "Duplicate ${packet.messageId} at destination — re-ACK")
+                        sendReliablePacket(packet.createAckPacket(myNodeId))
+                    }
+                    Log.d(TAG, "Replay/duplicate packet ${packet.messageId} ignored (destination dedup)")
+                    return
+                }
+            }
+
             // Phase 8: ACK must route back through routing table, NOT via raw sendPacket.
             if (packet.recipientId != "*" && !packet.isGroupOrZone) {
                 val ackPacket = packet.createAckPacket(myNodeId)
@@ -223,14 +233,10 @@ class MeshRoutingManager(
                 Log.i(TAG, "ACK for ${packet.messageId} queued via routing table (back to ${packet.senderId})")
             }
 
-            // Decrypt payload for local consumption
-            val decryptedPacket = try {
-                packet.withDecryption()
-            } catch (e: Exception) {
-                Log.w(TAG, "Packet ${packet.messageId} failed end-to-end decryption: ${e.message}")
-                return
-            }
-            onLocalDeliver(decryptedPacket)
+            // Transport boundary already hop-decrypted the payload, so packet.text is
+            // the plaintext — deliver directly. (Replay protection is enforced at the
+            // dedup step above; this is the single local-consumption path.)
+            onLocalDeliver(packet)
         } else {
             // 5. Multi-Hop Intermediate Relay Forwarding — route-aware, next-hop targeted.
             forwardPacketViaRoute(packet)

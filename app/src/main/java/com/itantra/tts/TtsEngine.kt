@@ -267,6 +267,16 @@ class TtsEngine(
 
     override fun isModelLoaded(): Boolean = hasRealModel
 
+    /** The language code the engine is currently initialized for ("" when none). */
+    @Synchronized
+    override fun currentLanguageCode(): String =
+        if (isInitialized) currentLanguage.code else ""
+
+    /** True when the engine is loaded and initialized FOR this exact language. */
+    @Synchronized
+    override fun isLoadedFor(languageCode: String): Boolean =
+        isInitialized && hasRealModel && currentLanguage.code.equals(languageCode, ignoreCase = true)
+
     override fun release() {
         try {
             tts?.release()

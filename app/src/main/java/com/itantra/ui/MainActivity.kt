@@ -235,12 +235,22 @@ class MainActivity : AppCompatActivity() {
 
     // ---------------- Transport dropdown ----------------
 
-    private val transportOptions = arrayOf("Bluetooth", "Wi-Fi Direct")
+    private val transportOptions = arrayOf("AUTO · BT + Wi-Fi", "Bluetooth", "Wi-Fi Direct")
 
     private fun setupTransportDropdown() {
         binding.spinnerTransport.adapter = TransportAdapter(this, transportOptions)
         binding.spinnerTransport.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
             override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+                // The selector drives the ACTUAL active radios. AUTO enables both;
+                // explicit choices restrict the composite to that single transport.
+                (currentTransport as? com.itantra.transport.CompositeTransport)?.enabledTypes = when (position) {
+                    1 -> setOf(com.itantra.transport.TransportType.BLUETOOTH)
+                    2 -> setOf(com.itantra.transport.TransportType.WIFI_DIRECT)
+                    else -> setOf(
+                        com.itantra.transport.TransportType.BLUETOOTH,
+                        com.itantra.transport.TransportType.WIFI_DIRECT
+                    )
+                }
                 orchestrator.setupTransportListener()
                 refreshPeerState()
             }
@@ -253,13 +263,15 @@ class MainActivity : AppCompatActivity() {
     private class TransportAdapter(context: Context, items: Array<String>) :
         ArrayAdapter<String>(context, 0, items) {
 
-        private val icons = intArrayOf(R.drawable.ic_transport_bt, R.drawable.ic_transport_wifi)
+        private val icons = intArrayOf(R.drawable.ic_transport_bt, R.drawable.ic_transport_bt, R.drawable.ic_transport_wifi)
+
+        private fun iconFor(position: Int): Int = icons[position.coerceIn(0, icons.size - 1)]
 
         override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
             val v = inflate(convertView, parent)
             v.findViewById<ImageView>(R.id.ivTransportIcon).backgroundTintList =
                 ContextCompat.getColorStateList(context, R.color.comm_green)
-            v.findViewById<ImageView>(R.id.ivTransportIcon).setImageResource(icons[position])
+            v.findViewById<ImageView>(R.id.ivTransportIcon).setImageResource(iconFor(position))
             v.findViewById<ImageView>(R.id.ivTransportIcon).imageTintList =
                 ContextCompat.getColorStateList(context, R.color.comm_green)
             val tv = v.findViewById<TextView>(R.id.tvTransportLabel)
@@ -272,7 +284,7 @@ class MainActivity : AppCompatActivity() {
         override fun getDropDownView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
             val v = inflate(convertView, parent)
             val icon = v.findViewById<ImageView>(R.id.ivTransportIcon)
-            icon.setImageResource(icons[position])
+            icon.setImageResource(iconFor(position))
             icon.imageTintList = ContextCompat.getColorStateList(context, R.color.comm_green)
             val tv = v.findViewById<TextView>(R.id.tvTransportLabel)
             tv.text = getItem(position)

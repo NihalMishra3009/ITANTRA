@@ -62,7 +62,10 @@ class TransportManager : TransportLayer {
         var anySent = false
         for ((_, peer) in peers) {
             if (peer.isConnected()) {
-                val bytes = codec.encode(packet)
+                val key = com.itantra.security.PeerSessionManager.getSessionKey(peer.nodeId)
+                    ?: continue // no session — cannot authenticate this hop yet
+                val wire = packet.withEncryption(key)
+                val bytes = codec.encode(wire, sessionKey = key)
                 if (peer.sendRaw(bytes)) anySent = true
             }
         }
@@ -84,7 +87,10 @@ class TransportManager : TransportLayer {
             Log.w(TAG, "Cannot send to $nodeId: no active connection")
             return false
         }
-        val bytes = codec.encode(packet)
+        val key = com.itantra.security.PeerSessionManager.getSessionKey(nodeId)
+            ?: return false
+        val wire = packet.withEncryption(key)
+        val bytes = codec.encode(wire, sessionKey = key)
         val sent = peer.sendRaw(bytes)
         if (!sent) {
             Log.w(TAG, "Failed to send to $nodeId, removing dead peer")
@@ -161,11 +167,15 @@ class TransportManager : TransportLayer {
                     if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
-                        val packet = codec.decode(buffer)
+                        val key = com.itantra.security.PeerSessionManager.getSessionKey(peer.nodeId)
+                        val packet = codec.decode(buffer, key)
                         if (packet != null) {
                             peer.lastSeenMs = System.currentTimeMillis()
                             withContext(Dispatchers.Main) {
-                                onPacketFromPeer(packet, peer)
+                                onPacketFromPeer(
+                                    if (packet.isEncrypted && key != null) packet.withDecryption(key) else packet,
+                                    peer
+                                )
                             }
                         }
                     }

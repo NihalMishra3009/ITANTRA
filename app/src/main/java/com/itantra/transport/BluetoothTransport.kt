@@ -238,15 +238,20 @@ class BluetoothTransport(
                     if (length in 1..1000000) {
                         val buffer = ByteArray(length)
                         dis.readFully(buffer)
-                        val packet = codec.decode(buffer)
+                        // Hop-level security: the packet was encrypted + HMAC'd with
+                        // THIS peer's session key by the sender. Bootstrap (SESSION_START)
+                        // is skipAuth and carries only ephemeral public keys.
+                        val peerKey = peer.nodeId?.let { com.itantra.security.PeerSessionManager.getSessionKey(it) }
+                        val packet = codec.decode(buffer, peerKey)
                         if (packet != null) {
                             peer.nodeId = packet.senderId
+                            val plain = if (packet.isEncrypted) packet.withDecryption(peerKey ?: return@launch) else packet
                             withContext(Dispatchers.Main) {
-                                onPacketCallback?.invoke(packet)
+                                onPacketCallback?.invoke(plain)
                             }
                         } else {
                             Log.w(TAG, "Bluetooth peer $address: codec.decode returned null (${buffer.size}B) — " +
-                                    "HMAC/format rejected")
+                                    "auth/HMAC/format rejected")
                         }
                     }
                 } catch (e: Exception) {
@@ -264,6 +269,28 @@ class BluetoothTransport(
         }
     }
 
+    /** Hop-encrypt + authenticate with THIS peer's session key, then write the frame. */
+    private fun writePeerFrame(peer: ActivePeer, packet: TextPacket): Boolean {
+        return try {
+            val isBootstrap = packet.type == com.itantra.protocol.PacketType.SESSION_START
+            val peerKey = peer.nodeId?.let { com.itantra.security.PeerSessionManager.getSessionKey(it) }
+            if (!isBootstrap && peerKey == null) {
+                Log.w(TAG, "Cannot authenticate packet to ${peer.nodeId ?: "unknown"}: no session key yet")
+                return false
+            }
+            val wire = if (isBootstrap) packet else packet.withEncryption(peerKey!!)
+            val bytes = codec.encode(wire, sessionKey = peerKey, skipAuth = isBootstrap)
+            val dos = peer.dataOut
+            dos.writeInt(bytes.size)
+            dos.write(bytes)
+            dos.flush()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to send frame to peer ${peer.nodeId ?: peer.address}", e)
+            false
+        }
+    }
+
     @Synchronized
     override fun sendPacket(packet: TextPacket): Boolean {
         if (peerConnections.isEmpty()) {
@@ -273,16 +300,7 @@ class BluetoothTransport(
         var anySent = false
         for ((_, peer) in peerConnections) {
             if (peer.socket.isConnected) {
-                try {
-                    val dos = peer.dataOut
-            val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
-                    dos.writeInt(bytes.size)
-                    dos.write(bytes)
-                    dos.flush()
-                    anySent = true
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to send to peer ${peer.address}", e)
-                }
+                if (writePeerFrame(peer, packet)) anySent = true
             }
         }
         return anySent
@@ -298,19 +316,13 @@ class BluetoothTransport(
             Log.w(TAG, "Cannot send to BT peer $nodeId: not connected")
             return false
         }
-        return try {
-            val dos = peer.dataOut
-            val bytes = codec.encode(packet, skipAuth = packet.type == com.itantra.protocol.PacketType.SESSION_START)
-            dos.writeInt(bytes.size)
-            dos.write(bytes)
-            dos.flush()
-            Log.d(TAG, "Sent to BT peer $nodeId (${bytes.size}B)")
-            true
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to send to BT peer $nodeId", e)
+        val sent = writePeerFrame(peer, packet)
+        if (sent) {
+            Log.d(TAG, "Sent to BT peer $nodeId")
+        } else {
             peerConnections.remove(peer.address)
-            false
         }
+        return sent
     }
 
     @Synchronized

@@ -123,7 +123,9 @@ class PipelineOrchestrator(
         val nodeProfile = com.itantra.identity.NodeIdentity.initialize(context)
         myNodeIdValue = nodeProfile.nodeId
         deviceSenderId = nodeProfile.nodeId
-        establishSessionKey()
+        // NOTE: no global session key. Every wire packet is encrypted + authenticated
+        // per-hop with the immediate peer's session key (see PeerSessionManager +
+        // transport writePeerFrame). This init only provisions the persistent identity.
         // Surface delivery-status changes to live UI (real backend state).
         deliveryTracker.onStatusChange = {
             _deliveryStatus.value = deliveryTracker.getAll().takeLast(20)
@@ -152,23 +154,20 @@ class PipelineOrchestrator(
     }
 
     /**
-     * Establish/restore a persistent per-device session key. Generated once and
-     * stored — NOT a hard-coded secret. Two devices pair by exchanging this key
-     * out-of-band via the ephemeral ECDH handshake.
+     * Build a wire packet. Payload encryption is applied per-hop by the transport
+     * boundary with the immediate peer's session key (hop-level model). Loopback
+     * (single-phone test) takes the plaintext directly — no wire exists.
      */
-    private fun establishSessionKey() {
-        if (MessageSecurityManager.hasSessionKey()) return
-        val prefs = context.getSharedPreferences("itantra_sec", Context.MODE_PRIVATE)
-        var key = prefs.getString("session_key", null)
-        if (key == null) {
-            key = android.util.Base64.encodeToString(
-                ByteArray(32).also { java.security.SecureRandom().nextBytes(it) },
-                android.util.Base64.NO_WRAP
-            )
-            prefs.edit().putString("session_key", key).apply()
-        }
-        MessageSecurityManager.setSessionKey(android.util.Base64.decode(key, android.util.Base64.NO_WRAP))
-        Log.i(TAG, "Session key established (ephemeral per-device)")
+    private fun buildPacket(text: String, isAlert: Boolean, type: PacketType): TextPacket {
+        return TextPacket(
+            senderId = deviceSenderId,
+            recipientId = targetRecipientId,
+            type = type,
+            language = currentLanguage.code,
+            text = text,
+            isAlert = isAlert,
+            timestamp = System.currentTimeMillis()
+        )
     }
 
     fun setupTransportListener() {
@@ -253,7 +252,9 @@ class PipelineOrchestrator(
 
     /**
      * Handles a SESSION_START packet. Returns true if consumed.
-     * Per-peer key derivation: each peer gets its own session key.
+     * Per-peer key derivation: each peer gets its own session key. Normal DATA
+     * packets are encrypted with the DIRECT peer's key at the transport boundary;
+     * this handshake only establishes that per-peer key material.
      */
     private fun handleSessionPacket(packet: TextPacket): Boolean {
         if (packet.type == PacketType.SESSION_START) {
@@ -270,8 +271,6 @@ class PipelineOrchestrator(
 
                     val shared = PeerSessionManager.handleHandshake(peerId, peerPubB64)
                     if (shared != null) {
-                        // Also set the global session key for backward compatibility
-                        MessageSecurityManager.setSessionKey(shared.sessionKey)
                         _lastReceivedText.value = "Connected to peer $peerId (session secured)"
                         Log.i(TAG, "Per-peer session established with $peerId")
 
@@ -392,9 +391,9 @@ class PipelineOrchestrator(
 
         coroutineScope.launch {
             _transceiverState.value = TransceiverState.TRANSCRIBING
-            val tSttStart = System.currentTimeMillis()
+            val tSttStart = BenchmarkLogger.nowMs()
             val sttResult = speechModelManager.transcribe(audioData)
-            val tSttEnd = System.currentTimeMillis()
+            val tSttEnd = BenchmarkLogger.nowMs()
 
             val normalizedText = IndicTextNormalizer.normalize(sttResult.text, currentLanguage.code)
             _lastTranscribedText.value = normalizedText
@@ -404,35 +403,39 @@ class PipelineOrchestrator(
                 return@launch
             }
 
-            val packet = TextPacket(
-                senderId = deviceSenderId,
-                recipientId = targetRecipientId,
-                type = if (isAlertNext) PacketType.SOS_ALERT else PacketType.DATA,
-                language = currentLanguage.code,
+            val packet = buildPacket(
                 text = normalizedText,
                 isAlert = isAlertNext,
-                timestamp = System.currentTimeMillis()
-            ).withEncryption()
-
+                type = if (isAlertNext) PacketType.EMERGENCY else PacketType.DATA
+            )
             isAlertNext = false
 
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
                 // Loopback / Standalone single phone test or offline outbox store
                 Log.i(TAG, "Dispatching packet via loopback / local pipeline")
-                handleIncomingPacket(packet.withDecryption(), tSpeechStart = speechStartTimestamp, tSpeechEnd = speechEndTimestamp, tSttStart = tSttStart, tSttEnd = tSttEnd, tSend = System.currentTimeMillis())
+                handleIncomingPacket(packet, tSpeechStart = speechStartTimestamp, tSpeechEnd = speechEndTimestamp, tSttStart = tSttStart, tSttEnd = tSttEnd, tSend = System.currentTimeMillis())
             } else {
                 _transceiverState.value = TransceiverState.TRANSMITTING
                 val tSend = System.currentTimeMillis()
 
-                // Measure real on-wire packet size (binary vs equivalent JSON)
-                val binaryBytes = com.itantra.protocol.BinaryPacketCodec().encode(packet).size
+                // Measure real on-wire packet size (binary vs equivalent JSON) using a
+                // hop-encrypted packet so the size reflects the authenticated wire form.
+                val peerKey = PeerSessionManager.activePeerIds().firstOrNull()
+                    ?.let { PeerSessionManager.getSessionKey(it) }
+                val binaryBytes = if (peerKey != null) {
+                    com.itantra.protocol.BinaryPacketCodec().encode(packet.withEncryption(peerKey), peerKey).size
+                } else {
+                    // No established peer yet: report the plaintext binary size — the wire
+                    // form would be larger; never fabricate an authenticated size we didn't make.
+                    com.itantra.protocol.BinaryPacketCodec().encode(packet, skipAuth = true).size
+                }
                 val jsonBytes = packet.toJsonBytes().size
                 BenchmarkLogger.logPacketSize(currentLanguage.code, normalizedText, binaryBytes, jsonBytes)
 
                 meshRoutingManager?.sendReliablePacket(packet) { acknowledged ->
                     Log.i(TAG, "Message ${packet.messageId} delivery status: ACK=$acknowledged")
                 }
-                Log.i(TAG, "Encrypted packet queued/transmitted over ${transport?.transportType} at $tSend ($binaryBytes B binary vs $jsonBytes B JSON)")
+                Log.i(TAG, "Encrypted packet queued/transmitted over ${transport?.transportType} at $tSend ($binaryBytes B wire vs $jsonBytes B JSON)")
                 _transceiverState.value = TransceiverState.IDLE
             }
         }
@@ -447,18 +450,14 @@ class PipelineOrchestrator(
 
         coroutineScope.launch {
             _lastTranscribedText.value = "[Typed] $clean"
-            val packet = TextPacket(
-                senderId = deviceSenderId,
-                recipientId = targetRecipientId,
-                type = if (isAlert) PacketType.SOS_ALERT else PacketType.DATA,
-                language = currentLanguage.code,
+            val packet = buildPacket(
                 text = clean,
                 isAlert = isAlert,
-                timestamp = System.currentTimeMillis()
-            ).withEncryption()
+                type = if (isAlert) PacketType.EMERGENCY else PacketType.DATA
+            )
 
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
-                handleIncomingPacket(packet.withDecryption(), tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L, tSend = System.currentTimeMillis())
+                handleIncomingPacket(packet, tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L, tSend = System.currentTimeMillis())
             } else {
                 meshRoutingManager?.sendReliablePacket(packet) { ack ->
                     Log.i(TAG, "Direct text message ${packet.messageId} ACK=$ack")
@@ -484,8 +483,9 @@ class PipelineOrchestrator(
             _lastReceivedText.value = "[${packet.senderId}] " + packet.text
             deliveryTracker.update(packet.messageId, com.itantra.transport.DeliveryStatus.PLAYING, packet.hopCount)
 
-            // Switch TTS model to packet language if needed
-            if (ttsEngine.synthesize("").languageCode != packet.language) {
+            // Switch TTS model to packet language if needed (no synthesize() probe —
+            // explicit state inspection instead).
+            if (!ttsEngine.isLoadedFor(packet.language)) {
                 ttsEngine.initialize(packet.language)
             }
 

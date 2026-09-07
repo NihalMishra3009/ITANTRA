@@ -53,9 +53,12 @@ class BinaryPacketCodec {
     }
 
     /**
-     * Encode a TextPacket into compact binary.
+     * Encode a TextPacket into compact binary, authenticated (HMAC-SHA256) with
+     * the supplied per-peer session key. There is NO global-key fallback: a
+     * non-bootstrap packet without an explicit key is rejected.
+     * @param sessionKey per-peer hop key (the key for the immediate next hop).
      * @param skipAuth if true, writes an all-zero HMAC tag and skips authentication.
-     *                 Used for SESSION_START bootstrap packets where no shared key exists yet.
+     *                 Only for SESSION_START bootstrap packets where no shared key exists yet.
      */
     fun encode(packet: TextPacket, sessionKey: ByteArray? = null, skipAuth: Boolean = false): ByteArray {
         val payloadBytes = packetPayloadBytes(packet)
@@ -106,17 +109,15 @@ class BinaryPacketCodec {
         buf.putShort(payloadBytes.size.toShort())
         buf.put(payloadBytes)
 
-        // Authenticate everything. When no explicit key is passed, use the active
-        // session key (established by MessageSecurityManager) so the wire packets
-        // are genuinely authenticated, not zero-padded.
         val preTagLen = buf.position()
         val auth = if (skipAuth) {
             ByteArray(AUTH_LEN) // all zeros — no authentication for bootstrap packets
         } else {
+            requireNotNull(sessionKey) {
+                "Authenticated wire packet requires an explicit per-peer session key (bootstrap = skipAuth)"
+            }
             val authData = buf.array().copyOf(preTagLen)
-            sessionKey ?: MessageSecurityManager.currentSessionKeyOrNull()
-                ?.let { MessageSecurityManager.computeHmac(authData, it) }
-                ?: ByteArray(AUTH_LEN)
+            MessageSecurityManager.computeHmac(authData, sessionKey)
         }
         buf.put(auth.copyOf(AUTH_LEN))
 
@@ -169,17 +170,16 @@ class BinaryPacketCodec {
             val auth = ByteArray(AUTH_LEN)
             buf.get(auth)
 
-            // Verify integrity. Use explicit key, else the active session key.
-            // Skip if FLAG_UNAUTH is set (bootstrap/handshake packet).
+            // Integrity: verify with the supplied per-peer hop key. Skip only for
+            // FLAG_UNAUTH bootstrap packets. If an authenticated packet arrives
+            // with NO key, it is rejected — never silently accepted.
             val isUnauth = (flags and FLAG_UNAUTH) != 0
             if (!isUnauth) {
-                val verifyKey = sessionKey ?: MessageSecurityManager.currentSessionKeyOrNull()
-                if (verifyKey != null) {
-                    val preTagLen = payloadStart + payloadLen
-                    val authData = bytes.copyOfRange(0, preTagLen)
-                    val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(AUTH_LEN)
-                    if (!expected.contentEquals(auth)) return null
-                }
+                val verifyKey = sessionKey ?: return null
+                val preTagLen = payloadStart + payloadLen
+                val authData = bytes.copyOfRange(0, preTagLen)
+                val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(AUTH_LEN)
+                if (!expected.contentEquals(auth)) return null
             }
 
             val type = PacketType.values().getOrNull(typeOrd) ?: return null
@@ -244,13 +244,11 @@ class BinaryPacketCodec {
             val auth = ByteArray(32)
             buf.get(auth)
 
-            val verifyKey = sessionKey ?: MessageSecurityManager.currentSessionKeyOrNull()
-            if (verifyKey != null) {
-                val preTagLen = payloadStart + payloadLen
-                val authData = bytes.copyOfRange(0, preTagLen)
-                val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(32)
-                if (!expected.contentEquals(auth)) return null
-            }
+            val verifyKey = sessionKey ?: return null
+            val preTagLen = payloadStart + payloadLen
+            val authData = bytes.copyOfRange(0, preTagLen)
+            val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(32)
+            if (!expected.contentEquals(auth)) return null
 
             val type = PacketType.values().getOrNull(typeOrd) ?: return null
             val language = LANG_INDEX.getOrNull(langIdx) ?: return null
@@ -308,12 +306,10 @@ class BinaryPacketCodec {
             val auth = ByteArray(32)
             buf.get(auth)
 
-            val verifyKey = sessionKey ?: MessageSecurityManager.currentSessionKeyOrNull()
-            if (verifyKey != null) {
-                val authData = bytes.copyOfRange(0, 28 + payloadLen)
-                val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(32)
-                if (!expected.contentEquals(auth)) return null
-            }
+            val verifyKey = sessionKey ?: return null
+            val authData = bytes.copyOfRange(0, 28 + payloadLen)
+            val expected = MessageSecurityManager.computeHmac(authData, verifyKey).copyOf(32)
+            if (!expected.contentEquals(auth)) return null
 
             val type = PacketType.values().getOrNull(typeOrd) ?: return null
             val language = LANG_INDEX.getOrNull(langIdx) ?: return null

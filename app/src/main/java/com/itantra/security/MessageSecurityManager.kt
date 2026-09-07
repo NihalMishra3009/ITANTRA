@@ -43,31 +43,6 @@ object MessageSecurityManager {
 
     private val secureRandom = SecureRandom()
 
-    // Current derived session key material (raw 32-byte key)
-    private var sessionKeyBytes: ByteArray? = null
-
-    // --- Session key management ---------------------------------------------
-
-    @Synchronized
-    fun setSessionKey(key: ByteArray) {
-        require(key.size == KEY_BYTES) { "Session key must be $KEY_BYTES bytes" }
-        sessionKeyBytes = key
-        Log.i(TAG, "Session key established (${KEY_BYTES * 8}-bit)")
-    }
-
-    @Synchronized
-    fun clearSessionKey() {
-        sessionKeyBytes = null
-        Log.i(TAG, "Session key cleared")
-    }
-
-    @Synchronized
-    fun hasSessionKey(): Boolean = sessionKeyBytes != null
-
-    /** Expose the active session key (or null) for wire authentication. */
-    @Synchronized
-    fun currentSessionKeyOrNull(): ByteArray? = sessionKeyBytes?.copyOf()
-
     // --- Ephemeral key agreement (ECDH P-256) -------------------------------
 
     /**
@@ -214,12 +189,8 @@ object MessageSecurityManager {
     }
 
     private fun keyBytes(secretKey: ByteArray?): ByteArray {
-        if (secretKey != null) {
-            require(secretKey.size == KEY_BYTES) { "Key must be $KEY_BYTES bytes" }
-            return secretKey
-        }
-        return sessionKeyBytes
-            ?: throw IllegalStateException("No session key set — call setSessionKey() or pass explicit key")
+        require(secretKey != null && secretKey.size == KEY_BYTES) { "Key must be $KEY_BYTES bytes and explicitly provided — per-peer session keys only" }
+        return secretKey
     }
 
     // --- Persistent node keypair (application identity, NodeIdentity) -------

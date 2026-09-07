@@ -89,6 +89,7 @@ class TextPacketTest {
     @Test
     fun testBinaryCodecRoundTripCompactSize() {
         val codec = BinaryPacketCodec()
+        val key = ByteArray(32) { it.toByte() }
         val text = "मुझे सहायता चाहिए"  // 20+ UTF-8 bytes in Hindi
         val packet = TextPacket(
             messageId = "abc12345",
@@ -101,14 +102,14 @@ class TextPacketTest {
             timestamp = System.currentTimeMillis()
         )
 
-        val encoded = codec.encode(packet)
-        val decoded = codec.decode(encoded)
+        val encoded = codec.encode(packet.withEncryption(key), sessionKey = key)
+        val decoded = codec.decode(encoded, sessionKey = key)
 
         assertNotNull(decoded)
         assertEquals(PacketType.DATA, decoded!!.type)
         assertEquals("hi", decoded.language)
         assertEquals(77, decoded.sequence)
-        assertEquals(text, decoded.text)
+        assertEquals(text, decoded.withDecryption(key).text)
         // VERSION 4+ preserves sender/recipient AND the exact message id
         assertEquals("ITN-AAAA11", decoded.senderId)
         assertEquals("ITN-B91C", decoded.recipientId)
@@ -120,6 +121,7 @@ class TextPacketTest {
         // Phase 2 requirement: the exact message id must not change across
         // encode -> decode -> (relay) -> decode -> destination.
         val codec = BinaryPacketCodec()
+        val hopKey = ByteArray(32) { 0x21 }
         val originalId = "7f3a9c21" // realistic UUID-substring id
 
         val senderPacket = TextPacket(
@@ -132,23 +134,24 @@ class TextPacketTest {
         )
 
         // Relay 1: encode on A, decode on R1
-        val atR1 = codec.decode(codec.encode(senderPacket))!!
+        val atR1 = codec.decode(codec.encode(senderPacket.withEncryption(hopKey), hopKey), hopKey)!!
         assertEquals("Exact id must survive first hop", originalId, atR1.messageId)
 
         // Relay relays: same id, hopCount increments (createForwardedPacket)
         val atR1Forwarded = atR1.copy(messageId = atR1.messageId, hopCount = atR1.hopCount + 1)
         // Relay 2: encode on R1, decode on R2
-        val atR2 = codec.decode(codec.encode(atR1Forwarded))!!
+        val atR2 = codec.decode(codec.encode(atR1Forwarded.withEncryption(hopKey), hopKey), hopKey)!!
         assertEquals("Exact id must survive second hop", originalId, atR2.messageId)
 
         // Destination: decode after final relay
-        val dest = codec.decode(codec.encode(atR2.copy(messageId = atR2.messageId, hopCount = atR2.hopCount + 1)))!!
+        val dest = codec.decode(codec.encode(atR2.copy(messageId = atR2.messageId, hopCount = atR2.hopCount + 1).withEncryption(hopKey), hopKey), hopKey)!!
         assertEquals("Exact id must survive to destination", originalId, dest.messageId)
     }
 
     @Test
     fun testAckCarriesExactMessageId() {
         val codec = BinaryPacketCodec()
+        val key = ByteArray(32) { 0x33 }
         val originalId = "cafe1234"
         val data = TextPacket(
             messageId = originalId,
@@ -162,7 +165,7 @@ class TextPacketTest {
         assertEquals("ack_$originalId", ack.messageId)
 
         // ACK round-trips through the codec preserving its own (exact) id
-        val decodedAck = codec.decode(codec.encode(ack))!!
+        val decodedAck = codec.decode(codec.encode(ack.withEncryption(key), key), key)!!
         assertEquals("ack_$originalId", decodedAck.messageId)
     }
 
@@ -172,7 +175,6 @@ class TextPacketTest {
         // timestamp, or AEAD AAD binding breaks and the receiver cannot decrypt.
         val codec = BinaryPacketCodec()
         val key = ByteArray(32) { it.toByte() }
-        MessageSecurityManager.setSessionKey(key) // mirror production global-session path
 
         val packet = TextPacket(
             messageId = "aad_test_001",
@@ -182,10 +184,10 @@ class TextPacketTest {
             language = "hi",
             text = "मुझे मदद चाहिए",
             timestamp = System.currentTimeMillis() // ms precision
-        ).withEncryption() // uses global session key, like production code
+        ).withEncryption(key)
 
-        val encoded = codec.encode(packet) // uses global session key, like transports
-        val decoded = codec.decode(encoded)
+        val encoded = codec.encode(packet, sessionKey = key)
+        val decoded = codec.decode(encoded, sessionKey = key)
 
         assertNotNull("Encoded encrypted packet must decode", decoded)
         assertEquals("Timestamp must survive with full ms precision", packet.timestamp, decoded!!.timestamp)
@@ -194,13 +196,14 @@ class TextPacketTest {
         assertEquals("recipientId must survive", "ITN-B222", decoded.recipientId)
 
         // The decrypted text must match the original — proves AAD agreement.
-        val plain = decoded.withDecryption()
+        val plain = decoded.withDecryption(key)
         assertEquals("AEAD decrypt must succeed with preserved AAD fields", "मुझे मदद चाहिए", plain.text)
     }
 
     @Test
     fun testBinaryPacketIsFarSmallerThanJson() {
         val codec = BinaryPacketCodec()
+        val key = ByteArray(32) { it.toByte() }
         val packet = TextPacket(
             messageId = "abc12345",
             senderId = "NODE_A",
@@ -211,7 +214,7 @@ class TextPacketTest {
             timestamp = System.currentTimeMillis()
         )
 
-        val binarySize = codec.encode(packet).size
+        val binarySize = codec.encode(packet.withEncryption(key), key).size
         val jsonSize = packet.toJsonBytes().size
 
         // Binary must remove JSON structural overhead
@@ -232,7 +235,7 @@ class TextPacketTest {
             timestamp = System.currentTimeMillis()
         )
 
-        val encoded = codec.encode(packet, sessionKey = key)
+        val encoded = codec.encode(packet.withEncryption(key), sessionKey = key)
         // Flip a byte in the payload region (after 28-byte header)
         val corrupted = encoded.copyOf()
         val idx = encoded.size - 32 - 4 // last 4 bytes of payload
