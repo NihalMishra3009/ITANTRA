@@ -22,6 +22,7 @@ Pack layout (runtime must match)
 
 ```
 models/translation/{src}-{tgt}/
+    manifest.json                (itantra-mt-pack-v1; validated by installer)
     encoder_model.onnx
     decoder_model.onnx
     config.json
@@ -30,13 +31,20 @@ models/translation/{src}-{tgt}/
         sp.vocab
 ```
 
+## Native result envelope (structured, no string sniffing)
+
+- Success: `__MT_OK__:<translated text>`
+- Failure: `__MT_ERR__:<code>|<human message>`, codes 101 empty-input, 102 no-ort,
+  103 bad-pack, 104 no-env, 105 optlevel, 106 session-load, 107 no-mem,
+  108 enc-run, 109 shape, 110 dec-run, 111 tokenize-fail, 150 runtime.
+
 ## Special token IDs (read from config.json by the native adapter)
 
-| Field | hi-en | en-hi (expected, verify at pack build) |
+| Field | hi-en | en-hi (verified at pack build) |
 |-------|-------|-------|
-| vocab_size | 61127 | 61127 |
-| decoder_start_token_id | 61126 | 61126 |
-| pad_token_id | 61126 | 61126 |
+| vocab_size | 61127 | 61950 |
+| decoder_start_token_id | 61126 | 61949 |
+| pad_token_id | 61126 | 61949 |
 | eos_token_id | 0 | 0 |
 | bos_token_id | 0 | 0 |
 | d_model | 512 | 512 |
