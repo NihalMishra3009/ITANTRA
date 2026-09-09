@@ -416,9 +416,11 @@ class ModelDistributionManager(
                     // Engine contract per pack dir:
                     //   encoder_model.onnx, decoder_model.onnx, config.json  (root)
                     //   tokenizer/sentencepiece.model, tokenizer/sp.vocab   (tokenizer/)
+                    //   manifest.json (when the archive carries one)        (root)
                     destRel = when {
                         base.endsWith(".onnx") -> base
                         base.equals("config.json", true) -> base
+                        base.equals("manifest.json", true) -> base
                         path.contains("tokenizer/") -> path.substring(path.indexOf("tokenizer/"))
                         else -> null
                     }
