@@ -236,8 +236,11 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
             return mtErr(env, MT_NO_ENV, "ort env create failed");
         }
         OrtSessionOptions* opt = nullptr;
-        if (!check(g_ort->CreateSessionOptions(&opt))) { releaseSessionEnv(env1, nullptr, nullptr); return env->NewStringUTF("104:no-opt"); }
-        if (!check(g_ort->SetSessionGraphOptimizationLevel(opt, ORT_ENABLE_BASIC))) { g_ort->ReleaseSessionOptions(opt); releaseSessionEnv(env1, nullptr, nullptr); return mtErr(env, MT_OPTLEVEL, "set graph opt level failed"); }
+        if (!check(g_ort->CreateSessionOptions(&opt))) { releaseSessionEnv(env1, nullptr, nullptr); return mtErr(env, MT_NO_ENV, "session options failed"); }
+        // ORT_ENABLE_ALL: constant folding + operator fusion. Safe — pure graph
+        // optimization, no numerical change. Full KV-cache reuse (past_key_values)
+        // would require a re-exported decoder; deferred (latency measured in bench).
+        if (!check(g_ort->SetSessionGraphOptimizationLevel(opt, ORT_ENABLE_ALL))) { g_ort->ReleaseSessionOptions(opt); releaseSessionEnv(env1, nullptr, nullptr); return mtErr(env, MT_OPTLEVEL, "set graph opt level failed"); }
         OrtSession* enc = nullptr, *dec = nullptr;
         std::string encPath = dir + "/encoder_model.onnx";
         std::string decPath = dir + "/decoder_model.onnx";
@@ -298,23 +301,24 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
     std::vector<int64_t> generated;
     bool done = false;
     int steps = 0;
+    std::vector<int64_t> encShape2 = {1, S, D};
+    OrtValue* encHiddenIn = nullptr;
+    if (!check(g_ort->CreateTensorWithDataAsOrtValue(mem, encHidden.data(), encHidden.size() * sizeof(float),
+            encShape2.data(), 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &encHiddenIn))) {
+        g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_NO_MEM, "cpu memory info failed");
+    }
     while (steps < maxSteps && !done) {
         std::vector<int64_t> decShape = {1, (int64_t)decIds.size()};
         OrtValue* decIdsIn = nullptr;
-        OrtValue* encHiddenIn = nullptr;
         OrtValue* decOuts[1] = {nullptr};
         const char* decInNames[2] = {"input_ids", "encoder_hidden_states"};
         const char* decOutNames[1] = {"logits"};
         bool okd = check(g_ort->CreateTensorWithDataAsOrtValue(mem, decIds.data(), decIds.size() * sizeof(int64_t),
                 decShape.data(), 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, &decIdsIn));
-        std::vector<int64_t> encShape2 = {1, S, D};
-        if (okd) okd = check(g_ort->CreateTensorWithDataAsOrtValue(mem, encHidden.data(), encHidden.size() * sizeof(float),
-                encShape2.data(), 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &encHiddenIn));
         const OrtValue* decIns[2] = {decIdsIn, encHiddenIn};
         if (okd) okd = check(g_ort->Run(decoder, nullptr, decInNames, decIns, 2, decOutNames, 1, decOuts));
         g_ort->ReleaseValue(decIdsIn);
-        g_ort->ReleaseValue(encHiddenIn);
-        if (!okd) { g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_DEC_RUN, "decoder run failed"); }
+        if (!okd) { g_ort->ReleaseValue(encHiddenIn); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_DEC_RUN, "decoder run failed"); }
         void* logitsData = nullptr; g_ort->GetTensorMutableData(decOuts[0], &logitsData);
         int64_t T = (int64_t)decIds.size();
         std::vector<float> logits((float*)logitsData, (float*)logitsData + T * vocabSize);
@@ -325,6 +329,7 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         decIds.push_back(next);
         steps++;
     }
+    g_ort->ReleaseValue(encHiddenIn);
     int64_t tDec = nowNs() - t2;
     (void)ortEnv; // env lives with the cached pair; released on nnRelease / pair change
 
