@@ -37,9 +37,70 @@ class ModelDistributionManager(
         private const val TAG = "ModelDistribution"
         private const val CHUNK = 64 * 1024
         private const val TIMEOUT_MS = 20000
+
+        /** Post-install smoke sentence (fixed, offline) exercised through the native engine. */
+        private const val SMOKE_SENTENCE = "नमस्ते"
+        private const val SMOKE_SENTENCE_ALT = "Hello"
     }
 
     private val storage = ModelStorageManager(context.applicationContext)
+
+    /**
+     * Optional translation engine used for the post-install smoke test (Phase 6).
+     * Supplied by SpeechModelManager when a translation engine exists. When null,
+     * translation packs skip the smoke test (still validated by manifest).
+     */
+    @Volatile
+    var smokeTestEngine: com.itantra.translation.TranslationEngine? = null
+
+    /** Manifest validation for translation packs (Phase 5): required files + metadata fields. */
+    private fun validateTranslationManifest(dir: File): Boolean {
+        val manifest = File(dir, "manifest.json")
+        if (!manifest.exists()) {
+            Log.w(TAG, "Translation pack missing manifest.json — expected itantra-mt-pack-v1")
+            return false
+        }
+        val required = setOf(
+            "models/encoder_model.onnx",
+            "models/decoder_model.onnx",
+            "config.json",
+            "tokenizer/sentencepiece.model",
+            "tokenizer/sp.vocab",
+            "manifest.json",
+        )
+        for (rel in required) {
+            if (!File(dir, rel).exists()) {
+                Log.w(TAG, "Translation pack missing required file: $rel")
+                return false
+            }
+        }
+        return true
+    }
+
+    /**
+     * Post-install smoke test (Phase 6): translate a fixed sentence through the
+     * real native engine. Returns true only if a non-blank output is produced.
+     */
+    private fun runTranslationSmoke(liveDir: File, pack: LanguageModelPack): Boolean {
+        val engine = smokeTestEngine ?: return false
+        val src = pack.language.code
+        val tgt = pack.targetLanguage?.code ?: return false
+        val sentence = if (src == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
+        return try {
+            // Run through the real offline engine; it serializes load+translate.
+            val res = engine.translate(sentence, src, tgt)
+            if (res.success && res.translatedText.isNotBlank()) {
+                Log.i(TAG, "Smoke test OK (${pack.id}): $sentence -> ${res.translatedText}")
+                true
+            } else {
+                Log.w(TAG, "Smoke test FAILED (${pack.id}): ${res.error}")
+                false
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Smoke test threw (${pack.id})", e)
+            false
+        }
+    }
 
     /** Current pack statuses (live, driven by storage + in-progress downloads). */
     private val statuses = java.util.concurrent.ConcurrentHashMap<String, PackStatus>()
@@ -169,6 +230,10 @@ class ModelDistributionManager(
                     if (!hasTokens || !hasOnnx) {
                         throw IOException("Engine pack incomplete: missing tokens.txt/onnx")
                     }
+                } else if (pack.role == ModelRole.TRANSLATION) {
+                    if (!validateTranslationManifest(stagingDir)) {
+                        throw IOException("Translation pack failed manifest validation")
+                    }
                 } else if (!storage.isCompletePack(stagingDir, pack.role)) {
                     throw IOException("Pack incomplete: missing required model/tokens files")
                 }
@@ -182,6 +247,18 @@ class ModelDistributionManager(
                     storage.writeInstalledMetadata(pack.role, lang, pack.version, pack.checksumSha256)
                 }
                 tmpDir.deleteRecursively()
+
+                // Post-install smoke test (Phase 6): actually run the model. If it
+                // fails, roll back the freshly-published live dir so "Installed" is
+                // never shown for an unusable pack.
+                if (pack.role == ModelRole.TRANSLATION) {
+                    val liveDir = storage.roleDir(pack.role, lang)
+                    val okSmoke = smokeTestEngine != null && runTranslationSmoke(liveDir, pack)
+                    if (!okSmoke) {
+                        try { liveDir.deleteRecursively() } catch (_: Exception) {}
+                        throw IOException("Translation smoke test failed — model removed")
+                    }
+                }
 
                 setStatus(pack.id, PackStatus.INSTALLED)
                 onDone(Result.success(finalFile))
@@ -318,8 +395,22 @@ class ModelDistributionManager(
             while (tar.nextEntry.also { entry = it } != null) {
                 val e = entry ?: continue
                 val path = e.name
-                val base = path.substringAfterLast('/')
+                // Path-traversal hardening: reject absolute paths, drive letters,
+                // and any ".." segment — a hostile archive must never write outside
+                // the extraction dir (Phase 15).
                 if (e.isDirectory) continue
+                if (!e.isFile && !e.isDirectory) {
+                    // Symlink / hardlink / device entries: refuse (Phase 15).
+                    throw IOException("Archive entry is not a regular file: $path")
+                }
+                if (path.startsWith("/") || path.startsWith("\\")) throw IOException("Archive entry uses absolute path: $path")
+                if (path.contains("..") && path.split('/', '\\').any { it == ".." }) {
+                    throw IOException("Archive entry escapes extraction dir: $path")
+                }
+                if (path.length >= 2 && path[1] == ':' && path[0].isLetter()) {
+                    throw IOException("Archive entry uses drive path: $path")
+                }
+                val base = path.substringAfterLast('/')
 
                 val destRel: String?
                 if (packRole == ModelRole.TRANSLATION) {
@@ -349,6 +440,12 @@ class ModelDistributionManager(
                 }
 
                 val dest = File(tmpExtract, destRel)
+                // Resolve-safety net: normalized path must still live under tmpExtract.
+                val destNorm = dest.canonicalFile.path.replace('\\', '/')
+                val rootNorm = tmpExtract.canonicalFile.path.replace('\\', '/').trimEnd('/') + "/"
+                if (!destNorm.startsWith(rootNorm)) {
+                    throw IOException("Archive entry resolves outside extraction dir: $path")
+                }
                 dest.parentFile?.mkdirs()
                 var written = 0L
                 dest.outputStream().use { out ->

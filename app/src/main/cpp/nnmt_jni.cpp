@@ -177,8 +177,28 @@ static int64_t argmaxOverLogits(const std::vector<float>& logits, int64_t rowSta
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_itantra_translation_OpusMtTranslationEngine_nnNativeTest(JNIEnv* env, jobject) {
     std::lock_guard<std::mutex> lk(g_mtx);
-    if (!ensureOrtApiLocked()) return env->NewStringUTF("NATIVE_TEST_FAIL:no-ort");
-    return env->NewStringUTF("NATIVE_TEST_OK");
+    if (!ensureOrtApiLocked()) return env->NewStringUTF("__MT_ERR__:102|no-ort");
+    return env->NewStringUTF("__MT_OK__:NATIVE_TEST_OK");
+}
+
+// ---- Structured result envelope ----
+// Success:  "__MT_OK__:<translated text>"
+// Failure:  "__MT_ERR__:<code>|<message>"
+// codes: 101 empty input | 102 no ort | 103 bad pack | 104 no env/opts
+//        105 optlevel | 106 session load | 107 no mem | 108 enc run
+//        109 shape | 110 dec run | 111 tokenize fail | 150 runtime
+enum MtErrCode { MT_EMPTY_INPUT = 101, MT_NO_ORT = 102, MT_BAD_PACK = 103,
+                 MT_NO_ENV = 104, MT_OPTLEVEL = 105, MT_SESSION_LOAD = 106,
+                 MT_NO_MEM = 107, MT_ENC_RUN = 108, MT_SHAPE = 109,
+                 MT_DEC_RUN = 110, MT_TOK_FAIL = 111, MT_RUNTIME = 150 };
+
+static jstring mtErr(JNIEnv* env, int code, const char* msg) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "__MT_ERR__:%d|%s", code, msg);
+    return env->NewStringUTF(buf);
+}
+static jstring mtOk(JNIEnv* env, const std::string& text) {
+    return env->NewStringUTF(("__MT_OK__:" + text).c_str());
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -196,11 +216,11 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
     std::string dir = dirC, text = textC;
     env->ReleaseStringUTFChars(jModelDir, dirC);
     env->ReleaseStringUTFChars(jText, textC);
-    if (dir.empty() || text.empty()) return env->NewStringUTF("101:empty-input");
+    if (dir.empty() || text.empty()) return mtErr(env, MT_EMPTY_INPUT, "empty input");
 
     std::lock_guard<std::mutex> lk(g_mtx);  // serialize load + translate (P1)
 
-    if (!ensureOrtApiLocked()) return env->NewStringUTF("102:no-ort");
+    if (!ensureOrtApiLocked()) return mtErr(env, MT_NO_ORT, "onnx runtime unavailable");
 
     // ---- Session cache: reuse encoder/decoder for this pair (P1) ----
     if (g_pair.dir != dir || g_pair.enc == nullptr || g_pair.dec == nullptr) {
@@ -208,23 +228,23 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         auto m = std::make_unique<PackModel>();
         if (!loadConfig(dir, *m) || !loadTokenizer(dir, *m)) {
             clearPair();
-            return env->NewStringUTF("103:bad-pack");
+            return mtErr(env, MT_BAD_PACK, "translation pack invalid");
         }
         g_pair.model = std::move(m);
         OrtEnv* env1 = nullptr;
         if (!check(g_ort->CreateEnv(ORT_LOGGING_LEVEL_WARNING, "itantra_mt", &env1))) {
-            return env->NewStringUTF("104:no-env");
+            return mtErr(env, MT_NO_ENV, "ort env create failed");
         }
         OrtSessionOptions* opt = nullptr;
         if (!check(g_ort->CreateSessionOptions(&opt))) { releaseSessionEnv(env1, nullptr, nullptr); return env->NewStringUTF("104:no-opt"); }
-        if (!check(g_ort->SetSessionGraphOptimizationLevel(opt, ORT_ENABLE_BASIC))) { g_ort->ReleaseSessionOptions(opt); releaseSessionEnv(env1, nullptr, nullptr); return env->NewStringUTF("105:no-optlev"); }
+        if (!check(g_ort->SetSessionGraphOptimizationLevel(opt, ORT_ENABLE_BASIC))) { g_ort->ReleaseSessionOptions(opt); releaseSessionEnv(env1, nullptr, nullptr); return mtErr(env, MT_OPTLEVEL, "set graph opt level failed"); }
         OrtSession* enc = nullptr, *dec = nullptr;
         std::string encPath = dir + "/encoder_model.onnx";
         std::string decPath = dir + "/decoder_model.onnx";
         bool okE = check(g_ort->CreateSession(env1, encPath.c_str(), opt, &enc));
         if (okE) okE = check(g_ort->CreateSession(env1, decPath.c_str(), opt, &dec));
         g_ort->ReleaseSessionOptions(opt);
-        if (!okE) { releaseSessionEnv(env1, enc, dec); return env->NewStringUTF("106:load-session"); }
+        if (!okE) { releaseSessionEnv(env1, enc, dec); return mtErr(env, MT_SESSION_LOAD, "encoder/decoder session load failed"); }
         g_pair.dir = dir; g_pair.env = env1; g_pair.enc = enc; g_pair.dec = dec;
         LOGI("MT pair cached: %s", dir.c_str());
     }
@@ -235,12 +255,12 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
     OrtEnv* ortEnv = g_pair.env;
 
     OrtMemoryInfo* mem = nullptr;
-    if (!check(g_ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mem))) return env->NewStringUTF("107:no-mem");
+    if (!check(g_ort->CreateCpuMemoryInfo(OrtArenaAllocator, OrtMemTypeDefault, &mem))) return mtErr(env, MT_NO_MEM, "cpu memory info failed");
 
     int64_t t0 = nowNs();
     auto ids = tokenize(text, model);
     if (ids.empty())
-        { g_ort->ReleaseMemoryInfo(mem); return env->NewStringUTF("111:tok-fail"); }
+        { g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_TOK_FAIL, "tokenization failed"); }
     int64_t tTok = nowNs() - t0;
 
     // ---- Encoder ----
@@ -255,12 +275,12 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
             encShape.data(), 2, ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64, &encIn));
     if (ok) ok = check(g_ort->Run(encoder, nullptr, encInNames, (const OrtValue* const*)&encIn, 1, encOutNames, 1, encOuts));
     if (encIn) g_ort->ReleaseValue(encIn);
-    if (!ok) { g_ort->ReleaseMemoryInfo(mem); return env->NewStringUTF("108:enc-run"); }
+    if (!ok) { g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_ENC_RUN, "encoder run failed"); }
     int64_t tEnc = nowNs() - t1;
 
     // Extract last_hidden_state [1,S,D].
     OrtTensorTypeAndShapeInfo* info = nullptr;
-    if (!check(g_ort->GetTensorTypeAndShape(encOuts[0], &info))) { g_ort->ReleaseValue(encOuts[0]); g_ort->ReleaseMemoryInfo(mem); return env->NewStringUTF("109:shape"); }
+    if (!check(g_ort->GetTensorTypeAndShape(encOuts[0], &info))) { g_ort->ReleaseValue(encOuts[0]); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_SHAPE, "tensor shape read failed"); }
     size_t ndim = 0; g_ort->GetDimensionsCount(info, &ndim);
     std::vector<int64_t> dims(ndim, 0); g_ort->GetDimensions(info, dims.data(), ndim);
     void* encData = nullptr; g_ort->GetTensorMutableData(encOuts[0], &encData);
@@ -294,7 +314,7 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         if (okd) okd = check(g_ort->Run(decoder, nullptr, decInNames, decIns, 2, decOutNames, 1, decOuts));
         g_ort->ReleaseValue(decIdsIn);
         g_ort->ReleaseValue(encHiddenIn);
-        if (!okd) { g_ort->ReleaseMemoryInfo(mem); return env->NewStringUTF("110:dec-run"); }
+        if (!okd) { g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_DEC_RUN, "decoder run failed"); }
         void* logitsData = nullptr; g_ort->GetTensorMutableData(decOuts[0], &logitsData);
         int64_t T = (int64_t)decIds.size();
         std::vector<float> logits((float*)logitsData, (float*)logitsData + T * vocabSize);
@@ -322,5 +342,5 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
              (long long)(tTok / 1000), (long long)(tEnc / 1000),
              (long long)(tDec / 1000), (long long)(nowNs() - t0) / 1000);
     std::string res = out + meta;
-    return env->NewStringUTF(res.c_str());
+    return mtOk(env, res);
 }

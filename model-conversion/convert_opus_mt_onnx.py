@@ -85,6 +85,35 @@ def main():
             "src": src, "tgt": tgt,
         }, f, indent=2)
 
+    # Translation pack manifest (Phase 5): the installer validates this file.
+    manifest = {
+        "format": "itantra-mt-pack-v1",
+        "source_language": src,
+        "target_language": tgt,
+        "model_id": model_id,
+        "model_version": "opus-mt-2024",
+        "license": "Apache-2.0 (Helsinki-NLP Opus-MT)",
+        "required_files": [
+            "models/encoder_model.onnx",
+            "models/decoder_model.onnx",
+            "config.json",
+            "tokenizer/sentencepiece.model",
+            "tokenizer/sp.vocab",
+        ],
+        "tokenizer": "sentencepiece (unigram)",
+        "vocab_size": vocab_size,
+        "bos_token_id": bos_id,
+        "eos_token_id": eos_id,
+        "decoder_start_token_id": decoder_start_id,
+        "pad_token_id": pad_id,
+        "d_model": model.config.d_model,
+        "runtime": "onnxruntime",
+        "min_app_version": "1.0.0",
+    }
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print("[manifest] written")
+
     # ---- Dump the real SentencePiece model + vocab (IDs preserved) ----
     # Version-robust: transformers 5.x renamed tok.sp_model; the .spm bytes are
     # available via tok.spm_source / spm_target (loaded SentencePieceProcessor),

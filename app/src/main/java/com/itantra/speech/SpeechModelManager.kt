@@ -61,7 +61,10 @@ class SpeechModelManager(
     )
 
     /** Download-once-then-offline model pack installer. */
-    val distribution = ModelDistributionManager(appContext)
+    val distribution = ModelDistributionManager(appContext).apply {
+        // Post-install smoke test uses the real engine (Phase 6).
+        smokeTestEngine = translationEngine
+    }
 
     private val registry = ModelPackRegistry(appContext, distribution)
 

@@ -25,6 +25,42 @@ import java.util.concurrent.atomic.AtomicBoolean
  * pack (or the native adapter) is absent the engine returns TRANSLATION_UNAVAILABLE
  * — it NEVER fabricates a translation.
  */
+/**
+ * Structured native result — unambiguous, not string-sniffed. Returned by
+ * OpusMtTranslationEngine.parseNativeRaw for the "__MT_OK__"/"__MT_ERR__"
+ * envelopes produced by the JNI adapter.
+ */
+sealed class NativeTranslateResult {
+    data class Success(val raw: String) : NativeTranslateResult() {
+        val text: String get() = raw.substringBefore('\n')
+        val timing: TranslationTiming? = parseTiming(raw)
+        private fun parseTiming(raw: String): TranslationTiming? {
+            var tok = 0L; var enc = 0L; var dec = 0L; var total = 0L
+            for (line in raw.split('\n')) {
+                when {
+                    line.startsWith("__mttok=") -> tok = line.removePrefix("__mttok=").trim().toLongOrNull() ?: 0L
+                    line.startsWith("__mtenc=") -> enc = line.removePrefix("__mtenc=").trim().toLongOrNull() ?: 0L
+                    line.startsWith("__mtdec=") -> dec = line.removePrefix("__mtdec=").trim().toLongOrNull() ?: 0L
+                    line.startsWith("__mtall=") -> total = line.removePrefix("__mtall=").trim().toLongOrNull() ?: 0L
+                }
+            }
+            return if (tok > 0 || enc > 0 || dec > 0 || total > 0) TranslationTiming(tok, enc, dec, total) else null
+        }
+    }
+    data class Error(val code: Int, val message: String) : NativeTranslateResult() {
+        fun userMessage(): String = when (code) {
+            101 -> "Translation produced empty input"
+            102 -> "Offline translation model failed to load (no ONNX runtime)"
+            103 -> "Translation model pack invalid"
+            104 -> "Offline translation model failed to load"
+            106 -> "Encoder/decoder model failed to load"
+            111 -> "Tokenization failed"
+            150 -> "Offline translation failed"
+            else -> message.ifBlank { "Offline translation failed" }
+        }
+    }
+}
+
 class OpusMtTranslationEngine(
     private val context: Context
 ) : TranslationEngine {
@@ -35,28 +71,55 @@ class OpusMtTranslationEngine(
         private const val NATIVE_LIB = "itantra_mt"
         private var nativeLoaded = false
         private var loadAttempted = false
+
+        /**
+         * Parse the native envelope "__MT_OK__:<text>/__MT_ERR__:<code>|<msg>".
+         * A malformed result is a runtime error, never silently a success. Pure —
+         * no Context dependency, so it is JVM-unit-testable.
+         */
+        fun parseNativeRaw(raw: String): NativeTranslateResult =
+            when {
+                raw.startsWith("__MT_OK__:") -> NativeTranslateResult.Success(raw.removePrefix("__MT_OK__:"))
+                raw.startsWith("__MT_ERR__:") -> {
+                    val body = raw.removePrefix("__MT_ERR__:")
+                    val code = body.substringBefore('|').toIntOrNull() ?: 150
+                    val msg = body.substringAfter('|', missingDelimiterValue = "native error")
+                    NativeTranslateResult.Error(code, msg)
+                }
+                else -> NativeTranslateResult.Error(150, "malformed native result")
+            }
     }
 
     private val loaded = AtomicBoolean(false)
     private var loadedKey: String? = null
+    private val selfTestDone = AtomicBoolean(false)
 
-    init {
-        // One-time off-main native self-test: load lib + resolve ORT C API. Logged
-        // so on-device ARM64 validation is observable in logcat (itan_mt). Failure
-        // is non-fatal — translation still reports UNAVAILABLE.
-        try {
-            java.util.concurrent.Executors.newSingleThreadExecutor().execute {
-                val tag = "itan_mt"
-                android.util.Log.i(tag, "nativeSelfTest -> " + nativeSelfTest())
-            }
-        } catch (_: Throwable) {}
+    /**
+     * One-time off-main native self-test (load lib + resolve ORT C API), triggered
+     * lazily on first model load rather than at construction — so creating an
+     * engine with no installed pack never spawns a thread (Phase 11).
+     * Logged so on-device ARM64 validation is observable in logcat (itan_mt).
+     * Failure is non-fatal — translation still reports UNAVAILABLE.
+     */
+    private fun onceSelfTest() {
+        if (selfTestDone.compareAndSet(false, true)) {
+            try {
+                java.util.concurrent.Executors.newSingleThreadExecutor().execute {
+                    val tag = "itan_mt"
+                    android.util.Log.i(tag, "nativeSelfTest -> " + nativeSelfTest())
+                }
+            } catch (_: Throwable) {}
+        }
     }
 
     /** On-device native self-test: load lib, resolve ORT C API, respond OK/FAIL. */
     fun nativeSelfTest(): String {
         val loadedOk = ensureNativeLoaded()
-        if (!loadedOk) return "NATIVE_TEST_FAIL:no-lib"
-        return try { nnNativeTest() } catch (e: Throwable) {
+        if (!loadedOk) return "__MT_ERR__:native-lib-unavailable"
+        return try {
+            val r = parseNativeRaw(nnNativeTest())
+            if (r is NativeTranslateResult.Success) "NATIVE_TEST_OK" else "NATIVE_TEST_FAIL:${(r as NativeTranslateResult.Error).code}"
+        } catch (e: Throwable) {
             "NATIVE_TEST_FAIL:" + (e.message ?: "err")
         }
     }
@@ -95,6 +158,7 @@ class OpusMtTranslationEngine(
             release()
             return false
         }
+        onceSelfTest()
         loadedKey = key
         loaded.set(true)
         return true
@@ -115,55 +179,23 @@ class OpusMtTranslationEngine(
         }
         val modelDir = File(context.filesDir, "$ROLE_DIR/${modelKey(sourceLanguage, targetLanguage)}").absolutePath
         return try {
-            val raw = nnTranslate(modelDir, text)
-            val (translated, timing) = parseNativeResult(raw)
+            val native = parseNativeRaw(nnTranslate(modelDir, text))
             val latencyMs = (System.nanoTime() - start) / 1_000_000
-            timing?.let { com.itantra.benchmark.BenchmarkLogger.logTranslationTiming(it) }
-            if (translated.isBlank() || translated.startsWith("10")) {
-                TranslationResult.failed(sourceLanguage, targetLanguage, nativeErrorKey(raw))
-            } else {
-                TranslationResult(translated, sourceLanguage, targetLanguage, latencyMs, success = true)
+            when (native) {
+                is NativeTranslateResult.Success -> {
+                    native.timing?.let { com.itantra.benchmark.BenchmarkLogger.logTranslationTiming(it) }
+                    TranslationResult(
+                        native.text, sourceLanguage, targetLanguage, latencyMs, success = true)
+                }
+                is NativeTranslateResult.Error -> {
+                    Log.e(TAG, "Native translation error ${native.code}: ${native.message}")
+                    TranslationResult.failed(sourceLanguage, targetLanguage, native.userMessage())
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Translation inference failed", e)
             TranslationResult.failed(sourceLanguage, targetLanguage, "Offline translation model failed to load.")
         }
-    }
-
-    /** Parse "text\n__mt<stage>=<us>…" from native into clean text + timings. */
-    internal fun parseNativeResult(raw: String): Pair<String, com.itantra.benchmark.TranslationTiming?> {
-        var text = raw
-        var tok = 0L; var enc = 0L; var dec = 0L; var total = 0L
-        val lines = raw.split('\n')
-        val clean = StringBuilder()
-        for (line in lines) {
-            when {
-                line.startsWith("__mttok=") -> tok = line.removePrefix("__mttok=").trim().toLongOrNull() ?: 0L
-                line.startsWith("__mtenc=") -> enc = line.removePrefix("__mtenc=").trim().toLongOrNull() ?: 0L
-                line.startsWith("__mtdec=") -> dec = line.removePrefix("__mtdec=").trim().toLongOrNull() ?: 0L
-                line.startsWith("__mtall=") -> total = line.removePrefix("__mtall=").trim().toLongOrNull() ?: 0L
-                else -> if (clean.isNotEmpty() || line.isNotEmpty()) { if (clean.isNotEmpty()) clean.append('\n'); clean.append(line) }
-            }
-        }
-        text = clean.toString()
-        val timing = if (tok > 0 || enc > 0 || dec > 0 || total > 0)
-            TranslationTiming(tokenizerMicros = tok, encoderMicros = enc, decoderMicros = dec, totalMicros = total)
-        else null
-        return text to timing
-    }
-
-    private fun nativeErrorKey(raw: String): String {
-        if (raw.startsWith("10")) {
-            return when (raw.substring(0, 3)) {
-                "101" -> "Translation produced empty input"
-                "102" -> "Offline translation model failed to load (no ONNX runtime)"
-                "103" -> "Translation model pack invalid (missing config/vocab)"
-                "104" -> "Offline translation model failed to load"
-                "106" -> "Encoder/decoder model failed to load"
-                else -> "Offline translation failed"
-            }
-        }
-        return "Translation produced empty output"
     }
 
     override fun release() {

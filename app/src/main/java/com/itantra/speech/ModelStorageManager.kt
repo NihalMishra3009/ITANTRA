@@ -101,9 +101,30 @@ class ModelStorageManager(private val context: Context) {
         }?.toList() ?: emptyList()
     }
 
-    /** Measured total size (bytes) of an installed pack from actual files. */
-    fun sizeBytes(role: ModelRole, lang: String): Long =
-        modelFiles(role, lang).sumOf { it.length() }
+    /**
+     * Measured total size (bytes) of an installed pack from actual files.
+     * Recursive — translation packs contain nested dirs (models/, tokenizer/)
+     * plus flat STT/TTS packs, so direct-child counting would undercount.
+     * Excludes housekeeping files (VERSION/CHECKSUM/TMP).
+     */
+    fun sizeBytes(role: ModelRole, lang: String): Long {
+        val dir = roleDir(role, lang)
+        if (!dir.exists()) return 0L
+        var bytes = 0L
+        java.util.ArrayDeque<File>().apply {
+            add(dir)
+        }.also { queue ->
+            while (queue.isNotEmpty()) {
+                val f = queue.poll()
+                if (f.isDirectory) {
+                    f.listFiles()?.forEach { queue.add(it) }
+                } else if (f.name != VERSION_FILE && f.name != CHECKSUM_FILE && f.name != TMP_DIR) {
+                    bytes += f.length()
+                }
+            }
+        }
+        return bytes
+    }
 
     /** Every installed STT language + its measured size (bytes). */
     fun installedStt(): Map<String, Long> = installedLanguages(ModelRole.STT)
