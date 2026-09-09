@@ -124,10 +124,14 @@ class LanguageModelsActivity : AppCompatActivity() {
                 textSize = 13f
             })
             val progress = TextView(this).apply {
-                visibility = View.GONE
                 setTextColor(getColor(R.color.comm_amber))
                 textSize = 10f
             }
+            // Persistent status line: downloading %, verifying, corrupted, failed, not hosted.
+            // GONE once fully installed (green action button is self-evident).
+            progress.text = translationStatusLabel(status)
+            progress.visibility =
+                if (status == PackStatus.INSTALLED || status == PackStatus.LOADED) View.GONE else View.VISIBLE
             labels.addView(progress)
             row.addView(labels)
 
@@ -157,6 +161,16 @@ class LanguageModelsActivity : AppCompatActivity() {
         Tab.AVAILABLE -> smm.enginePacks().any { p -> p.downloadUrl != null &&
             smm.distributionManager().status(p) == PackStatus.NOT_INSTALLED }
         Tab.ALL -> true
+    }
+
+    private fun translationStatusLabel(status: PackStatus): String = when (status) {
+        PackStatus.NOT_INSTALLED -> "Not installed"
+        PackStatus.DOWNLOADING -> "Downloading…"
+        PackStatus.VERIFYING -> "Verifying & installing…"
+        PackStatus.LOADING -> "Loading…"
+        PackStatus.FAILED -> "Download failed — retry from device network"
+        PackStatus.CORRUPTED -> "SHA-256 check failed — redownload"
+        else -> ""
     }
 
     /** Languages grouped by code — hi/en first, then alphabetical. */
