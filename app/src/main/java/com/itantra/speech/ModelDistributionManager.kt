@@ -53,28 +53,27 @@ class ModelDistributionManager(
     @Volatile
     var smokeTestEngine: com.itantra.translation.TranslationEngine? = null
 
-    /** Manifest validation for translation packs (Phase 5): required files + metadata fields. */
+    /**
+     * Manifest validation for translation packs (Phase 5). New packs (itantra-mt-
+     * pack-v1) carry manifest.json and it is validated: format marker + every
+     * declared required file must exist. Legacy hosted archives predate the
+     * manifest — for those, the 5-file runtime contract is enforced via
+     * isCompleteTranslationPackFiles instead. A present-but-invalid manifest
+     * always fails; an absent manifest is not silently accepted for new packs.
+     */
     private fun validateTranslationManifest(dir: File): Boolean {
         val manifest = File(dir, "manifest.json")
-        if (!manifest.exists()) {
-            Log.w(TAG, "Translation pack missing manifest.json — expected itantra-mt-pack-v1")
-            return false
+        if (manifest.exists()) {
+            val required = com.itantra.speech.ModelStorageManager.translationRequiredFiles
+            val okFormat = try {
+                val j = org.json.JSONObject(manifest.readText())
+                j.optString("format") == "itantra-mt-pack-v1"
+            } catch (_: Exception) { false }
+            val okFiles = required.all { File(dir, it).exists() }
+            return okFormat && okFiles
         }
-        val required = setOf(
-            "models/encoder_model.onnx",
-            "models/decoder_model.onnx",
-            "config.json",
-            "tokenizer/sentencepiece.model",
-            "tokenizer/sp.vocab",
-            "manifest.json",
-        )
-        for (rel in required) {
-            if (!File(dir, rel).exists()) {
-                Log.w(TAG, "Translation pack missing required file: $rel")
-                return false
-            }
-        }
-        return true
+        // Legacy pack (no manifest): enforce the same runtime contract.
+        return com.itantra.speech.ModelStorageManager.isCompleteTranslationPackFiles(dir)
     }
 
     /**

@@ -47,15 +47,9 @@ class ModelStorageManager(private val context: Context) {
         if (role == ModelRole.TRANSLATION) isCompleteTranslationPack(dir)
         else Companion.isCompletePackFiles(dir)
 
-    /** Translation packs need encoder + decoder ONNX + config + SP model/vocab. */
-    private fun isCompleteTranslationPack(dir: File): Boolean {
-        if (!dir.isDirectory) return false
-        val hasEnc = File(dir, "encoder_model.onnx").exists()
-        val hasDec = File(dir, "decoder_model.onnx").exists()
-        val hasCfg = File(dir, "config.json").exists()
-        val hasTok = File(File(dir, "tokenizer"), "sentencepiece.model").exists()
-        return hasEnc && hasDec && hasCfg && hasTok
-    }
+    /** Translation packs need encoder + decoder ONNX + config + SP model/vocab (models/ contract). */
+    private fun isCompleteTranslationPack(dir: File): Boolean =
+        isCompleteTranslationPackFiles(dir)
 
     companion object {
         private const val MODELS_DIR = "models"
@@ -87,6 +81,46 @@ class ModelStorageManager(private val context: Context) {
             val hasOnnx = files.any { it.name.endsWith(".onnx", ignoreCase = true) }
             return hasTokens && hasOnnx
         }
+
+        /** Translation pack required files — DEVICE runtime contract after the installer
+         * flattens hosted archives (encoder/decoder .onnx in the models/ subdir move
+         * to the pack root; tokenizer/ stays nested). manifest.json is validated
+         * separately (when present).
+         */
+        val translationRequiredFiles: List<String> = listOf(
+            "encoder_model.onnx",
+            "decoder_model.onnx",
+            "config.json",
+            "tokenizer/sentencepiece.model",
+            "tokenizer/sp.vocab",
+        )
+
+        /** Pure (Context-free) translation-pack validation — unit-testable in JVM. */
+        fun isCompleteTranslationPackFiles(dir: File): Boolean {
+            if (!dir.isDirectory) return false
+            return translationRequiredFiles.all { File(dir, it).exists() }
+        }
+
+        /** Pure (Context-free) recursive size of a pack dir, excluding housekeeping. */
+        fun packSizeBytes(dir: File, isIgnored: (String) -> Boolean): Long {
+            if (!dir.exists()) return 0L
+            var bytes = 0L
+            val queue = java.util.ArrayDeque<File>()
+            queue.add(dir)
+            while (queue.isNotEmpty()) {
+                val f = queue.poll()
+                if (f.isDirectory) {
+                    f.listFiles()?.forEach { queue.add(it) }
+                } else if (!isIgnored(f.name)) {
+                    bytes += f.length()
+                }
+            }
+            return bytes
+        }
+
+        /** True for model-housekeeping file names (excluded from pack accounting). */
+        fun isIgnoredHousekeeping(name: String): Boolean =
+            name == VERSION_FILE || name == CHECKSUM_FILE || name == TMP_DIR
     }
 
     /** True if the pack directory exists AND contains the required model files. */
@@ -107,24 +141,8 @@ class ModelStorageManager(private val context: Context) {
      * plus flat STT/TTS packs, so direct-child counting would undercount.
      * Excludes housekeeping files (VERSION/CHECKSUM/TMP).
      */
-    fun sizeBytes(role: ModelRole, lang: String): Long {
-        val dir = roleDir(role, lang)
-        if (!dir.exists()) return 0L
-        var bytes = 0L
-        java.util.ArrayDeque<File>().apply {
-            add(dir)
-        }.also { queue ->
-            while (queue.isNotEmpty()) {
-                val f = queue.poll()
-                if (f.isDirectory) {
-                    f.listFiles()?.forEach { queue.add(it) }
-                } else if (f.name != VERSION_FILE && f.name != CHECKSUM_FILE && f.name != TMP_DIR) {
-                    bytes += f.length()
-                }
-            }
-        }
-        return bytes
-    }
+    fun sizeBytes(role: ModelRole, lang: String): Long =
+        packSizeBytes(roleDir(role, lang), ::isIgnoredHousekeeping)
 
     /** Every installed STT language + its measured size (bytes). */
     fun installedStt(): Map<String, Long> = installedLanguages(ModelRole.STT)

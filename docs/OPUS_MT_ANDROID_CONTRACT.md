@@ -20,16 +20,39 @@ Tamil → "வணக்கம்" → tamil→EN → EN→Marathi → Marathi te
 
 Pack layout (runtime must match)
 
+HOST layout (converter `convert_opus_mt_onnx.py` output / hosted archive body,
+top-level dir is the pair):
+
 ```
-models/translation/{src}-{tgt}/
-    manifest.json                (itantra-mt-pack-v1; validated by installer)
-    encoder_model.onnx
-    decoder_model.onnx
+{hi-en}/
+    manifest.json      (itantra-mt-pack-v1)
+    models/
+        encoder_model.onnx
+        decoder_model.onnx
     config.json
     tokenizer/
         sentencepiece.model
         sp.vocab
 ```
+
+DEVICE layout (installer flattens `models/*.onnx` to the pack root; that is what
+the JNI adapter loads — `encoder_model.onnx` at root, not under models/):
+
+```
+models/translation/{src}-{tgt}/
+    encoder_model.onnx
+    decoder_model.onnx
+    config.json
+    manifest.json            (present when the archive carried one)
+    tokenizer/
+        sentencepiece.model
+        sp.vocab
+```
+
+The device-contract required files are enforced by
+`ModelStorageManager.translationRequiredFiles`. `manifest.json` is validated when
+present (format marker `itantra-mt-pack-v1` + all contract files); legacy hosted
+archives that predate the manifest still install via the contract-file check.
 
 ## Native result envelope (structured, no string sniffing)
 

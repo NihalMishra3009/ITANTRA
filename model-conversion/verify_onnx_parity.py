@@ -44,27 +44,35 @@ SENTENCES = [
 MAX_STEPS = 64
 
 
-def greedy_onnx(ort_sess_enc, ort_sess_dec, ids, decoder_start, eos_id, pad_id, vocab_size):
+def greedy_onnx(ort_sess_enc, ort_sess_dec, ids, decoder_start, eos_id, pad_id, vocab_size, bench=False):
     import numpy as np
     import onnxruntime as ort
+    import time
 
     enc_in = np.asarray([ids], dtype=np.int64)  # [1,S]
+    t0 = time.perf_counter()
     enc_hidden = ort_sess_enc.run(["last_hidden_state"], {"input_ids": enc_in})[0]  # [1,S,D]
+    t_enc = (time.perf_counter() - t0) * 1e6
     S, D = enc_hidden.shape[1], enc_hidden.shape[2]
     dec = [int(decoder_start)]
     gen = []
+    t_dec_total = 0.0
     for _ in range(MAX_STEPS):
         dec_in = np.asarray([dec], dtype=np.int64)
+        t0 = time.perf_counter()
         logits = ort_sess_dec.run(["logits"], {
             "input_ids": dec_in,
             "encoder_hidden_states": enc_hidden,
         })[0]  # [1,T,V]
+        t_dec_total += (time.perf_counter() - t0) * 1e6
         T = dec_in.shape[1]
         next_id = int(np.argmax(logits[0, T - 1, :]))
         if next_id in (eos_id, pad_id):
             break
         gen.append(next_id)
         dec.append(next_id)
+    if bench:
+        return gen, t_enc, t_dec_total
     return gen
 
 
@@ -72,6 +80,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--pack", required=True, action="append", help="hi-en or en-hi pack dir")
     ap.add_argument("--model", default=None)
+    ap.add_argument("--bench", action="store_true",
+                    help="print host encode/decode/full latencies (us) per sentence (Phase 20, host numbers)")
     args = ap.parse_args()
 
     from transformers import MarianTokenizer, MarianMTModel
@@ -79,6 +89,7 @@ def main():
     import torch
 
     all_pass = True
+    bench_sums = {}
     for pack in args.pack:
         name = os.path.basename(pack)
         src = name.split("-")[0]
@@ -96,8 +107,11 @@ def main():
         model = MarianMTModel.from_pretrained(model_id)
         model.eval()
 
-        enc = ort.InferenceSession(os.path.join(pack, "models", "encoder_model.onnx"), providers=["CPUExecutionProvider"])
-        dec = ort.InferenceSession(os.path.join(pack, "models", "decoder_model.onnx"), providers=["CPUExecutionProvider"])
+        # ORT with the same graph-optimization level as the Android adapter (Phase 8).
+        so = ort.SessionOptions()
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        enc = ort.InferenceSession(os.path.join(pack, "models", "encoder_model.onnx"), so, providers=["CPUExecutionProvider"])
+        dec = ort.InferenceSession(os.path.join(pack, "models", "decoder_model.onnx"), so, providers=["CPUExecutionProvider"])
 
         # find model ids from the HF tokenizer (authoritative)
         decoder_start = model.config.decoder_start_token_id
@@ -126,9 +140,11 @@ def main():
                 if len(hf_dec) > 64:
                     break
             ref = tok.decode(hf_dec, skip_special_tokens=True)
-            import torch as _torch
-            hf_eh = hf_eh  # keep alive
-            gen_ids = greedy_onnx(enc, dec, ids, decoder_start, eos_id, pad_id, vocab_size)
+            if args.bench:
+                gen_ids, t_enc, t_dec = greedy_onnx(enc, dec, ids, decoder_start, eos_id, pad_id, vocab_size, bench=True)
+                bench_sums.setdefault(name, []).append((t_enc, t_dec, t_enc + t_dec))
+            else:
+                gen_ids = greedy_onnx(enc, dec, ids, decoder_start, eos_id, pad_id, vocab_size)
             onnx_text = tok.decode(gen_ids, skip_special_tokens=True) if gen_ids else ""
             same = ref.strip() == onnx_text.strip()
             all_pass = all_pass and same
@@ -136,6 +152,16 @@ def main():
             if not same:
                 print(f"        HF   : {ref!r}")
                 print(f"        ONNX : {onnx_text!r}")
+
+    if args.bench and bench_sums:
+        import statistics
+        print("\n== HOST LATENCY (Phase 20 — host CPU numbers, NOT device) ==")
+        for name, rows in bench_sums.items():
+            enc_us = statistics.median(r[0] for r in rows)
+            dec_us = statistics.median(r[1] for r in rows)
+            tot_ms = statistics.median(r[2] for r in rows) / 1000.0
+            print(f"{name}: encode median {enc_us:8.0f} us | decode median {dec_us:8.0f} us | total median {tot_ms:6.1f} ms")
+        print("(device latencies require P18/P20 on hardware — these host numbers are a lower bound only)")
 
     print()
     print("[PASS] tokenizer parity" if all_pass else "[FAIL] tokenizer parity (see above)")
