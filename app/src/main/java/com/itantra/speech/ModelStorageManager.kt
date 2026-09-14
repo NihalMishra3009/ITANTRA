@@ -123,6 +123,22 @@ class ModelStorageManager(private val context: Context) {
             name == VERSION_FILE || name == CHECKSUM_FILE || name == TMP_DIR
 
         /**
+         * Phase 11 archive-entry policy: an entry path is safe only when it is
+         * relative, free of any ".." segment, absolute/backslash forms, drive
+         * letters, and encoded traversal. Applied before extraction so no archive
+         * can write outside its staging dir.
+         */
+        fun isSafeArchiveEntryPath(path: String): Boolean {
+            if (path.isEmpty()) return false
+            if (path.startsWith("/") || path.startsWith("\\")) return false
+            if (path.length >= 2 && path[1] == ':' && path[0].isLetter()) return false
+            if (path.split('/', '\\').any { it == ".." }) return false
+            val lower = path.lowercase()
+            if (lower.contains("%2e%2e") || lower.contains("..%2f") || lower.contains("..%5c")) return false
+            return true
+        }
+
+        /**
          * Phase 1 rollback: atomically publish [stagingDir] into [liveDir], keeping
          * the previous live install as a backup. Returns the backup dir (null when
          * there was no previous install). The caller must [restoreFromBackup] on any

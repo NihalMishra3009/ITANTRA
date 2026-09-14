@@ -383,20 +383,14 @@ class ModelDistributionManager(
             while (tar.nextEntry.also { entry = it } != null) {
                 val e = entry ?: continue
                 val path = e.name
-                // Path-traversal hardening: reject absolute paths, drive letters,
-                // and any ".." segment — a hostile archive must never write outside
-                // the extraction dir (Phase 15).
+                // Phase 11 path-traversal hardening: a single policy gate before any
+                // extraction decision. Unsupported entries are refused, never st3Aged.
                 if (e.isDirectory) continue
                 if (!e.isFile && !e.isDirectory) {
-                    // Symlink / hardlink / device entries: refuse (Phase 15).
                     throw IOException("Archive entry is not a regular file: $path")
                 }
-                if (path.startsWith("/") || path.startsWith("\\")) throw IOException("Archive entry uses absolute path: $path")
-                if (path.contains("..") && path.split('/', '\\').any { it == ".." }) {
-                    throw IOException("Archive entry escapes extraction dir: $path")
-                }
-                if (path.length >= 2 && path[1] == ':' && path[0].isLetter()) {
-                    throw IOException("Archive entry uses drive path: $path")
+                if (!com.itantra.speech.ModelStorageManager.isSafeArchiveEntryPath(path)) {
+                    throw IOException("Archive entry unsafe (traversal/absolute/encoded): $path")
                 }
                 val base = path.substringAfterLast('/')
 

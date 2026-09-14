@@ -166,10 +166,13 @@ class LanguageModelsActivity : AppCompatActivity() {
     private fun translationStatusLabel(status: PackStatus): String = when (status) {
         PackStatus.NOT_INSTALLED -> "Not installed"
         PackStatus.DOWNLOADING -> "Downloading…"
-        PackStatus.VERIFYING -> "Verifying & installing…"
+        PackStatus.VERIFYING -> "Verifying SHA-256…"
+        PackStatus.SMOKE_TESTING -> "Smoke-testing model…"
         PackStatus.LOADING -> "Loading…"
         PackStatus.FAILED -> "Download failed — retry from device network"
         PackStatus.CORRUPTED -> "SHA-256 check failed — redownload"
+        PackStatus.INSTALLED -> "Installed"
+        PackStatus.LOADED -> "Installed & ready"
         else -> ""
     }
 
