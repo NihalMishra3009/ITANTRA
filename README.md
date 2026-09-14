@@ -19,7 +19,7 @@ All model assets run locally via ONNX Runtime — **no cloud APIs, no internet**
 
 ## 🈯 Cross-Language Communication (Offline)
 
-iTantra supports real-time cross-language walkie-talkie: the sender speaks one
+iTantra supports offline cross-language walkie-talkie: the sender speaks one
 language, the receiver hears another. Everything runs offline.
 
 ```text

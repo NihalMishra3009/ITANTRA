@@ -7,7 +7,7 @@
 
 ## 1. Executive Summary
 
-This report documents the quantitative optimizations, hyperparameter tuning, and quantization methods applied to the **Whisper base int8 (STT)**, **Silero VAD**, and **VITS (TTS)** engines to achieve real-time, low-latency performance on resource-constrained Android mobile devices.
+This report documents the quantitative optimizations, hyperparameter tuning, and quantization methods applied to the **Whisper base int8 (STT)**, **Silero VAD**, and **VITS (TTS)** engines targeting real-time, low-latency performance on resource-constrained Android mobile devices. **Targeting is a design objective — no device-measured latency is claimed in this document (see section 6).**
 
 ```
 +───────────────────────────────────────────────────────────────────────────────────────────+

@@ -16,7 +16,7 @@ Honest mapping of the ML architecture against the SIH requirements. Status is PA
 | IndicF5 evaluated | Declared as candidate (high-quality); weights not bundled | PARTIAL (architecture ready, no weights) |
 | Lightweight VITS/Piper evaluated | Declared as candidate; existing VITS is the baseline | PARTIAL (no new weights) |
 | Model selection by benchmark | Selection engine + quality gate implemented | PASS (no fake numbers) |
-| VAD low latency | Energy VAD active; Silero asset present but v4-incompatible | PARTIAL |
+| VAD | Adaptive Energy VAD active (honest); Silero asset present, NOT promoted until a live device discrimination test passes | PARTIAL |
 | Unicode end-to-end | Text preserved as UTF-8 through packet/encryption/relay/TTS | PASS |
 | Emergency TTS priority | AudioFocus alarm-stream + max volume for alerts | PASS |
 | No existing networking broken | Builds + all tests pass | PASS |
