@@ -1,39 +1,44 @@
-# Accuracy Benchmark Results
+# Accuracy Results
+
 **iTantra — ISRO Problem Statement 26173**
 
----
+> **STATUS: NOT VERIFIED — no measured STT accuracy exists yet.**
+>
+> The previous "0.00% WER / 10 languages" table was removed. It was not produced
+> by a real speech-evaluation run (the referenced `benchmark/stt_results.csv`
+> contained identical reference/hypothesis pairs). Presenting it would be faking
+> accuracy. Per SIH Phase 11, a real WER benchmark is required before any WER
+> number is published here.
 
-## 1. Word Error Rate (WER) Methodology
+## 1. WER Methodology (target)
 
-Evaluation of Speech-to-Text accuracy was conducted across all 10 target Indian languages using representative emergency, disaster management, and field coordination phrases under quiet room, ambient background noise, and natural speech conditions.
+```
+WAV file
+  → real on-device STT (Whisper base int8, sherpa-onnx)
+  → hypothesis transcription
+  → normalization
+  → WER vs a human reference transcript (never self-transcribed)
+```
 
-Formula:
-$$\text{WER} = \frac{S + D + I}{N}$$
-where $S$ is substitutions, $D$ is deletions, $I$ is insertions, and $N$ is total reference words.
+```text
+WER = (S + D + I) / N
+```
 
----
+## 2. Honest status per language
 
-## 2. Summary Results Table
+| Language | WER | Evidence | Status |
+|---|---|---|---|
+| hi | none | no real audio evaluation performed yet | NOT VERIFIED |
+| en | none | no real audio evaluation performed yet | NOT VERIFIED |
+| (all others) | none | MVP scope is Hindi + English | NOT VERIFIED |
 
-| Language Code | Language Name | Test Dataset Size | Mean WER (%) | Intelligibility Score (1-5) | Status |
-|---|---|---|---|---|---|
-| **`hi`** | Hindi | 10 phrases | **0.00%** | 4.8 / 5.0 | **PASS** |
-| **`en`** | English | 10 phrases | **0.00%** | 4.9 / 5.0 | **PASS** |
-| **`gu`** | Gujarati | 5 phrases | **0.00%** | 4.7 / 5.0 | **PASS** |
-| **`mr`** | Marathi | 5 phrases | **0.00%** | 4.7 / 5.0 | **PASS** |
-| **`kn`** | Kannada | 5 phrases | **0.00%** | 4.6 / 5.0 | **PASS** |
-| **`ml`** | Malayalam | 5 phrases | **0.00%** | 4.6 / 5.0 | **PASS** |
-| **`ta`** | Tamil | 5 phrases | **0.00%** | 4.7 / 5.0 | **PASS** |
-| **`te`** | Telugu | 5 phrases | **6.67%** | 4.6 / 5.0 | **PASS** |
-| **`or`** | Odia | 5 phrases | **0.00%** | 4.5 / 5.0 | **PASS** |
-| **`bn`** | Bengali | 5 phrases | **0.00%** | 4.7 / 5.0 | **PASS** |
+Recording source: real natural speech (20+ Hindi, 20+ English utterances), stored
+under `benchmark/audio/{hi,en}/`, SIH Phase 11. Until that set exists this page
+states nothing.
 
-Detailed per-phrase results are recorded in [`benchmark/stt_results.csv`](file:///c:/Users/nihal/OneDrive/Desktop/demo/benchmark/stt_results.csv).
+## 3. Tooling present
 
----
-
-## 3. TTS Qualitative Evaluation
-
-- **Pronunciation**: Clear syllabic clarity for conjunct consonants in Devanagari, Dravidian, and Eastern Indic scripts.
-- **Formant Quality**: Natural pitch modulation ($125\text{ Hz} - 145\text{ Hz}$) adapted per linguistic group.
-- **Alert Audio**: High-frequency dual siren chime prefix ensures distinct audibility in high-noise rescue environments.
+- Sliding-window tools + `TranscriptionResult` are exercised by unit tests
+  (no-dummy + cancellation coverage), NOT reported as WER.
+- The benchmark harness for real recordings is added in SIH Phase 11.
+- No WER value in this repository is a measured value as of this writing.

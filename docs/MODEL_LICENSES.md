@@ -8,7 +8,7 @@ Licenses for models referenced by the repository. Publicly downloadable does not
 |-------|----------|---------|-------|
 | Whisper base (encoder/decoder int8 ONNX) | all 10 | MIT | OpenAI Whisper code/weights MIT |
 | VITS `vits_bn` | Bengali | MIT | Bundled `model.onnx` + `tokens.txt` |
-| Silero VAD (v4) | — | MIT | Asset bundled; v4 format incompatible with this runtime, energy fallback active |
+| Silero VAD (v4) | — | MIT | Asset bundled; VAD active detector is Adaptive Energy VAD until a live on-device Silero discrimination test passes (SIH Phase 8) |
 
 ## Downloadable Voice Packs (verified hosted)
 
@@ -25,7 +25,7 @@ Licenses for models referenced by the repository. Publicly downloadable does not
 
 | Model | Pair | License | Runtime | Notes |
 |-------|------|---------|---------|-------|
-| Helsinki-NLP Opus-MT | hi ↔ en | **Apache-2.0** (open-source approved) | ONNX Runtime (bundled libonnxruntime.so) | Converted via model-conversion/convert_opus_mt_onnx.py → model.onnx + tokens.txt under models/translation/hi-en/ and en-hi/. Operator hosts the converted artifact; downloadUrl + SHA-256 are pinned once a verified build exists. |
+| Helsinki-NLP Opus-MT | hi ↔ en | **Apache-2.0** (open-source approved) | ONNX Runtime (bundled libonnxruntime.so) | Converted via model-conversion/convert_opus_mt_onnx.py → encoder_model.onnx + decoder_model.onnx + config.json + manifest.json + tokenizer/ under models/translation/hi-en/ and en-hi/. Hosted with pinned downloadUrl + SHA-256 (release `mt-onnx`). |
 
 Translation happens **sender-side, before encryption** — the wire carries only the
 final target-language compact text. Relay nodes never require a translation (or

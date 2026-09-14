@@ -95,10 +95,15 @@ class VadEngine(
 
     @Synchronized
     fun processChunk(audioChunk: FloatArray): VadEvent {
-        val now = System.currentTimeMillis()
+        // Monotonic clock (elapsedRealtime) — never wall-clock: processChunk must
+        // not jump on clock changes and always uses true audio-session timing.
+        val now = android.os.SystemClock.elapsedRealtime()
 
-        // Energy-based VAD is the ACTIVE detector (honest: not neural VAD). The
-        // bundled Silero model is v4-format and incompatible with this runtime.
+        // Energy VAD is the ACTIVE detector. The bundd Silero model is attempted at
+        // init; it executes under the bundled ORT, but neural VAD is only promoted
+        // to primary after a PASSING live speech/silence discrimination test on the
+        // physical device (SIH Phase 8). Until then: Adaptive Energy VAD, reported
+        // honestly (isUsingNeuralVad() == false).
         val rawProb = runEnergyVad(audioChunk)
         lastSpeechProb = rawProb
 
@@ -213,7 +218,7 @@ class VadEngine(
         }
     }
 
-    /** Energy fallback is always the active detector — Silero v4 model is incompatible. */
+    /** Energy fallback is the active detector until a live on-device Silero test passes. */
     fun isUsingNeuralVad(): Boolean = false
 
     fun reset() {

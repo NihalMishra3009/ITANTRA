@@ -1,14 +1,16 @@
 # SIH 26173 Compliance Matrix — iTantra
 
-All statuses reflect actual implementation verified against unit tests and real asset files. Where models/hardware are genuinely missing, status is PARTIAL with honest explanation.
+Status vocabulary (SIH Phase 22): IMPLEMENTED / UNIT TESTED / INTEGRATION TESTED /
+PHYSICALLY VERIFIED / NOT VERIFIED. "IMPLEMENTED" = code exists; it does NOT claim
+physical-device proof. Nothing here is PASS unless physically verified.
 
 | # | Requirement | Implementation | Test / Evidence | Status |
 |---|-------------|----------------|-----------------|--------|
-| 1 | Fully offline | Local Whisper STT, VITS TTS, Silero VAD via sherpa-onnx/ONNX. No cloud. `INTERNET` only for local P2P sockets. | `OFFLINE_VERIFICATION.md`; manifest audit | PASS |
-| 2 | STT sentence endpointing | 3-tier VAD: SHORT_PAUSE / SENTENCE_END / LONG_SILENCE. Configurable thresholds (250/700/2000ms). | `VadEngine.kt`; `VadEndpointingTest` | PASS |
-| 3 | 10-language STT | Whisper base int8 multilingual, all 10 Indian languages. `ModelCapabilityRegistry` verifies real assets. | `SttEngine.kt`; `ModelCapabilityRegistry` | PASS |
+| 1 | Fully offline | Local Whisper STT, VITS TTS, Silero VAD via sherpa-onnx/ONNX. No cloud. `INTERNET` only for local P2P sockets. | `OFFLINE_VERIFICATION.md`; manifest audit | IMPLEMENTED |
+| 2 | STT sentence endpointing | 3-tier VAD: SHORT_PAUSE / SENTENCE_END / LONG_SILENCE. Configurable thresholds (250/700/2000ms). Active detector = Adaptive Energy VAD (Phase 8); monotonic clock. | `VadEngine.kt`; `VadEndpointingTest` | UNIT TESTED |
+| 3 | 10-language STT | Whisper base int8 multilingual, all 10 Indian languages; Hindi/English = MVP priority. `ModelCapabilityRegistry` verifies real assets. | `SttEngine.kt`; `ModelCapabilityRegistry` | IMPLEMENTED (hi/en) — no real WER yet |
 | 4 | 10-language TTS | Per-language VITS. **Only Bengali bundled.** Architecture ready. | `TtsEngine.kt`; `ModelCapabilityRegistry` reports truth | **PARTIAL** (1/10 TTS models present) |
-| 5 | Low bitrate | Compact binary v4 packets: length-prefixed exact message ID + sender/recipient IDs. ~90-150B vs ~500B JSON. | `BinaryPacketCodec`; `TextPacketTest` | PASS |
+| 5 | Low bitrate | Compact binary v4 packets: length-prefixed exact message ID + sender/recipient IDs. ~90-150B vs ~500B JSON. | `BinaryPacketCodec`; `TextPacketTest` | UNIT TESTED |
 | 6 | Persistent Node ID | `ITN-XXXXXX` + P-256 keypair in app-private prefs. Persisted BEFORE profile construction. | `NodeIdentity.kt` Phase 1 fix | PASS |
 | 7 | Network discovery | NODE_HELLO / NODE_ANNOUNCE / ROUTE_REQUEST / RESPONSE / UPDATE / LOCATION_UPDATE. | `NetworkDiscoveryManager.kt` | PASS |
 | 8 | Privacy-preserving directory | Relay shares only minimal routing metadata. Private contacts never broadcast. | Architecture in `NetworkDiscoveryManager` | PASS |

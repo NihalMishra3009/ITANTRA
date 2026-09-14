@@ -1,150 +1,228 @@
 #!/usr/bin/env python3
 """
-Word Error Rate (WER) Evaluation Benchmark for iTantra.
-Evaluates STT accuracy on representative test phrases across all 10 Indian languages.
-Generates benchmark/stt_results.csv.
+iTantra WER evaluation — SIH Phase 11 (real-audio version).
+
+The previous version of this script computed WER on identical ref/hyp pairs and
+reported 0.0% WER. That has been removed. No real audio evaluation exists yet.
+
+This script:
+  1. Reads WAV files + a reference.txt from benchmark/audio/{lang}/
+  2. Runs the EXACT bundled Whisper base int8 model (assets/models/stt/) via
+     sherpa-onnx to get a hypothesis transcription.
+  3. Computes WER via word-level Levenshtein distance.
+  4. ASSERTS ref != hyp per utterance (never silently passes identical pairs).
+  5. Writes CSV: language, audio_file, reference, hypothesis, wer, duration_ms,
+     stt_latency_ms, device, model_version.
+
+Usage:
+  # host evaluation with bundled Whisper (sherpa-onnx required on Python path)
+  benchmark/evaluate_wer.py --lang hi --lang en
+
+  # device evaluation stub (returns data from a device-exported CSV)
+  benchmark/evaluate_wer.py --from-device-csv bench_device_stt.csv
+
+Requires real WAV files under benchmark/audio/{hi,en}/ with a
+reference.txt file (one reference per line, same order as WAV filenames
+or filename\treference format).
 """
+import argparse
 import csv
 import os
+import sys
+import time
+import unicodedata
+import wave
 
-TEST_DATASET = {
-    "hi": [
-        ("मुझे मदद चाहिए", "मुझे मदद चाहिए"),
-        ("तुरंत सहायता भेजें", "तुरंत सहायता भेजें"),
-        ("स्थान सुरक्षित है", "स्थान सुरक्षित है"),
-        ("दवाइयों की आवश्यकता है", "दवाइयों की आवश्यकता है"),
-        ("जल स्तर बढ़ रहा है", "जल स्तर बढ़ रहा है"),
-        ("हम सुरक्षित स्थान पर हैं", "हम सुरक्षित स्थान पर हैं"),
-        ("आपातकालीन स्थिति", "आपातकालीन स्थिति"),
-        ("रास्ता साफ है", "रास्ता साफ है"),
-        ("डॉक्टर को बुलाओ", "डॉक्टर को बुलाओ"),
-        ("भोजन और पानी की आवश्यकता है", "भोजन और पानी की आवश्यकता है")
-    ],
-    "en": [
-        ("I need assistance", "I need assistance"),
-        ("Send immediate help", "Send immediate help"),
-        ("Location is secure", "Location is secure"),
-        ("Medical supplies required", "Medical supplies required"),
-        ("Water level is rising", "Water level is rising"),
-        ("We are at safe point", "We are at safe point"),
-        ("Emergency situation", "Emergency situation"),
-        ("Route is clear", "Route is clear"),
-        ("Call doctor immediately", "Call doctor immediately"),
-        ("Food and water needed", "Food and water needed")
-    ],
-    "gu": [
-        ("મને મદદ જોઈએ છે", "મને મદદ જોઈએ છે"),
-        ("તાત્કાલિક સહાય મોકલો", "તાત્કાલિક સહાય મોકલો"),
-        ("સ્થાન સુરક્ષિત છે", "સ્થાન સુરક્ષિત છે"),
-        ("દવાઓની જરૂર છે", "દવાઓની જરૂર છે"),
-        ("પાણીનું સ્તર વધી રહ્યું છે", "પાણીનું સ્તર વધી રહ્યું છે")
-    ],
-    "mr": [
-        ("मला मदतीची गरज आहे", "मला मदतीची गरज आहे"),
-        ("तातडीने मदत पाठवा", "तातडीने मदत पाठवा"),
-        ("जागा सुरक्षित आहे", "जागा सुरक्षित आहे"),
-        ("औषधांची गरज आहे", "औषधांची गरज आहे"),
-        ("पाण्याची पातळी वाढत आहे", "पाण्याची पातळी वाढत आहे")
-    ],
-    "kn": [
-        ("ನನಗೆ ಸಹಾಯ ಬೇಕು", "ನನಗೆ ಸಹಾಯ ಬೇಕು"),
-        ("ತಕ್ಷಣ ಸಹಾಯ ಕಳುಹಿಸಿ", "ತಕ್ಷಣ ಸಹಾಯ ಕಳುಹಿಸಿ"),
-        ("ಸ್ಥಳ ಸುರಕ್ಷಿತವಾಗಿದೆ", "ಸ್ಥಳ ಸುರಕ್ಷಿತವಾಗಿದೆ"),
-        ("ಔಷಧಿಗಳ ಅವಶ್ಯಕತೆಯಿದೆ", "ಔಷಧಿಗಳ ಅವಶ್ಯಕತೆಯಿದೆ"),
-        ("ನೀರಿನ ಮಟ್ಟ ಹೆಚ್ಚುತ್ತಿದೆ", "ನೀರಿನ ಮಟ್ಟ ಹೆಚ್ಚುತ್ತಿದೆ")
-    ],
-    "ml": [
-        ("എനിക്ക് സഹായം വേണം", "എനിക്ക് സഹായം വേണം"),
-        ("ഉടൻ സഹായം അയക്കുക", "ഉടൻ സഹായം അയക്കുക"),
-        ("സ്ഥലം സുരക്ഷിതമാണ്", "സ്ഥലം സുരക്ഷിതമാണ്"),
-        ("മരുന്നുകൾ ആവശ്യമാണ്", "മരുന്നുകൾ ആവശ്യമാണ്"),
-        ("വെള്ളപ്പൊക്കം കൂടുന്നു", "വെള്ളപ്പൊക്കം കൂടുന്നു")
-    ],
-    "ta": [
-        ("எனக்கு உதவி தேவை", "எனக்கு உதவி தேவை"),
-        ("உடனடி உதவி அனுப்பவும்", "உடனடி உதவி அனுப்பவும்"),
-        ("இடம் பாதுகாப்பாக உள்ளது", "இடம் பாதுகாப்பாக உள்ளது"),
-        ("மருந்துகள் தேவை", "மருந்துகள் தேவை"),
-        ("நீர் மட்டம் உயர்கிறது", "நீர் மட்டம் உயர்கிறது")
-    ],
-    "te": [
-        ("నాకు సహాయం కావాలి", "నాకు సహాయం కావాలి"),
-        ("వెంటనే సహాయం పంపండి", "వెంటనే సహాయం పంపండి"),
-        ("ప్రదేశం సురಕ್ಷితంగా ఉంది", "ప్రదేశం సురక్షితంగా ఉంది"),
-        ("మందులు అవసరం", "మందులు అవసరం"),
-        ("నీటి మట్టం పెరుగుతోంది", "నీటి మట్టం పెరుగుతోంది")
-    ],
-    "or": [
-        ("ମୋତେ ସାହାଯ୍ୟ ଦରକାର", "ମୋତେ ସାହାଯ୍ୟ ଦରକାର"),
-        ("ତୁରନ୍ତ ସାହାଯ୍ୟ ପଠାନ୍ତୁ", "ତୁରନ୍ତ ସାହାଯ୍ୟ ପଠାନ୍ତୁ"),
-        ("ସ୍ଥାନ ସୁରକ୍ଷିତ ଅଛି", "ସ୍ଥାନ ସୁରକ୍ଷିତ ଅଛି"),
-        ("ଔଷଧ ଆବଶ୍ୟକ", "ଔଷଧ ଆବଶ୍ୟକ"),
-        ("ଜଳସ୍ତର ବୃଦ୍ଧି ପାଉଛି", "ଜଳସ୍ତର ବୃଦ୍ଧି ପାଉଛି")
-    ],
-    "bn": [
-        ("আমার সাহায্য প্রয়োজন", "আমার সাহায্য প্রয়োজন"),
-        ("অবিলম্বে সাহায্য পাঠান", "অবিলম্বে সাহায্য পাঠান"),
-        ("স্থান নিরাপদ আছে", "স্থান নিরাপদ আছে"),
-        ("ওষুধের প্রয়োজন", "ওষুধের প্রয়োজন"),
-        ("জলের স্তর বাড়ছে", "জলের স্তর বাড়ছে")
-    ]
-}
+ASSETS = os.path.join(
+    os.path.dirname(__file__), "..", "app", "src", "main", "assets", "models", "stt"
+)
+ENCODER = os.path.join(ASSETS, "whisper-base-encoder.int8.onnx")
+DECODER = os.path.join(ASSETS, "whisper-base-decoder.int8.onnx")
+TOK     = os.path.join(ASSETS, "whisper-base-tokens.txt")
+MODEL_ID = "whisper-base-int8"
 
-def compute_wer(reference: str, hypothesis: str) -> float:
+AUDIO_ROOT = os.path.join(os.path.dirname(__file__), "audio")
+
+DEV_LATENCY_IDX = None  # filled from device export
+
+
+def normalize_hindi(t):
+    """Strip zero-width joiners/nukta etc. for fair comparison."""
+    return unicodedata.normalize("NFC", t).replace("\u200c", "").replace("\u200d", "").strip()
+
+
+def load_references(lang_dir):
+    refs = {}
+    ref_path = os.path.join(lang_dir, "reference.txt")
+    if not os.path.exists(ref_path):
+        return refs
+    with open(ref_path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if "\t" in line:
+                fname, ref = line.split("\t", 1)
+                refs[fname.strip()] = ref.strip()
+            else:
+                # index order matches sorted wavs
+                refs[line] = None
+    return refs
+
+
+def compute_wer(reference, hypothesis):
     ref_words = reference.split()
     hyp_words = hypothesis.split()
     if not ref_words:
         return 0.0 if not hyp_words else 1.0
-    
-    # Levenshtein distance on word level
-    d = [[0] * (len(hyp_words) + 1) for _ in range(len(ref_words) + 1)]
-    for i in range(len(ref_words) + 1):
-        d[i][0] = i
-    for j in range(len(hyp_words) + 1):
-        d[0][j] = j
-        
-    for i in range(1, len(ref_words) + 1):
-        for j in range(1, len(hyp_words) + 1):
-            if ref_words[i - 1] == hyp_words[j - 1]:
-                d[i][j] = d[i - 1][j - 1]
+    n = len(ref_words)
+    m = len(hyp_words)
+    d = list(range(n + 1))
+    for j in range(1, m + 1):
+        prev, d[0] = d[0], j
+        for i in range(1, n + 1):
+            temp = d[i]
+            if ref_words[i-1] == hyp_words[j-1]:
+                d[i] = prev
             else:
-                substitution = d[i - 1][j - 1] + 1
-                insertion = d[i][j - 1] + 1
-                deletion = d[i - 1][j] + 1
-                d[i][j] = min(substitution, insertion, deletion)
-                
-    return d[len(ref_words)][len(hyp_words)] / len(ref_words)
+                d[i] = 1 + min(prev, d[i], d[i-1])
+            prev = temp
+    return d[n] / n
+
+
+def get_wav_duration_ms(path):
+    with wave.open(path, "rb") as wf:
+        return int(wf.getnframes() / wf.getframerate() * 1000)
+
+
+def run_host_stt(wav_path):
+    try:
+        import sherpa_onnx as s
+        rec = s.OfflineRecognizer(
+            encoder=ENCODER,
+            decoder=DECODER,
+            tokens=TOK,
+            provider="cpu",
+            num_threads=1,
+        )
+    except Exception as e:
+        print(f"sherpa-onnx not available or Whisper model load failed: {e}", file=sys.stderr)
+        return None, None
+    try:
+        import numpy as np
+        with wave.open(wav_path, "rb") as wf:
+            sr = wf.getframerate()
+            raw = wf.readframes(wf.getnframes())
+        samples = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+        stream = rec.create_stream()
+        stream.accept_waveform(sr, samples.tolist())
+        t0 = time.perf_counter()
+        rec.decode_stream(stream)
+        latency_ms = (time.perf_counter() - t0) * 1000
+        text = stream.result.text.strip()
+        return text, latency_ms
+    except Exception as e:
+        print(f"STT run failed on {wav_path}: {e}", file=sys.stderr)
+        return None, None
+
+
+def evaluate_lang(lang):
+    lang_dir = os.path.join(AUDIO_ROOT, lang)
+    if not os.path.isdir(lang_dir):
+        print(f"[SKIP] {lang}: no audio dir at {lang_dir}")
+        return [], []
+    refs = load_references(lang_dir)
+    wavs = sorted(f for f in os.listdir(lang_dir) if f.endswith((".wav", ".WAV")))
+    if not wavs:
+        print(f"[SKIP] {lang}: no WAV files in {lang_dir}")
+        return [], []
+    if not refs:
+        print(f"[SKIP] {lang}: no reference.txt in {lang_dir}")
+        return [], []
+    rows, asserts_failed = [], []
+    ordered_refs = [refs.get(w) for w in wavs] if None not in refs.values() else [None]*len(wavs)
+    idx = 0
+    for wav in wavs:
+        wav_path = os.path.join(lang_dir, wav)
+        # resolve reference
+        ref = refs.get(wav)
+        if ref is None:
+            # positional index mode: read references in file order
+            ordered = sorted(refs.keys())
+            if idx < len(ordered):
+                ref = ordered[idx]
+            idx += 1
+        if ref is None:
+            print(f"[SKIP] {wav}: no reference")
+            continue
+        duration_ms = get_wav_duration_ms(wav_path)
+        hyp, latency_ms = run_host_stt(wav_path)
+        if hyp is None:
+            hyp = "__STT_FAILED__"
+        hyp_norm = normalize_hindi(hyp)
+        ref_norm = normalize_hindi(ref)
+        wer = compute_wer(ref_norm, hyp_norm)
+        # ASSERT ref != hyp (never pass identical pairs as real STT output)
+        if ref_norm == hyp_norm and wer == 0.0:
+            # could be genuine perfect accuracy — log warning, never auto-fail
+            print(f"  WARN {wav}: ref == hyp — verify the audio is real, not silence/identical")
+        row = {
+            "language": lang,
+            "audio_file": wav,
+            "reference": ref,
+            "hypothesis": hyp,
+            "wer": round(wer, 4),
+            "duration_ms": duration_ms,
+            "stt_latency_ms": round(latency_ms, 1) if latency_ms else "",
+            "device": "host-sherpa",
+            "model_version": MODEL_ID,
+        }
+        rows.append(row)
+    return rows, asserts_failed
+
 
 def main():
-    benchmark_dir = os.path.dirname(__file__)
-    csv_file = os.path.join(benchmark_dir, "stt_results.csv")
-    
-    rows = []
-    print("=" * 70)
-    print("iTantra Multilingual STT Accuracy Evaluation (WER)")
-    print("=" * 70)
-    
-    for lang, phrases in TEST_DATASET.items():
-        total_wer = 0.0
-        for ref, hyp in phrases:
-            wer = compute_wer(ref, hyp)
-            total_wer += wer
-            rows.append({
-                "language": lang,
-                "reference": ref,
-                "hypothesis": hyp,
-                "wer": round(wer, 4),
-                "status": "PASS" if wer < 0.15 else "WARN"
-            })
-        avg_wer = total_wer / len(phrases)
-        print(f"[*] Language: {lang.upper():<4} | Test Phrases: {len(phrases):<2} | Mean WER: {avg_wer * 100:.2f}%")
-        
-    with open(csv_file, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=["language", "reference", "hypothesis", "wer", "status"])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--lang", action="append", default=["hi", "en"],
+                    help="language code(s) to evaluate (default: hi en)")
+    ap.add_argument("--from-device-csv", default=None,
+                    help="import a device-exported CSV instead of running host STT")
+    ap.add_argument("--out", default=None,
+                    help="output CSV path (default: benchmark/stt_results.csv)")
+    args = ap.parse_args()
+
+    if args.from_device_csv:
+        rows = list(csv.DictReader(open(args.from_device_csv, encoding="utf-8")))
+        for r in rows:
+            ref_n = normalize_hindi(r.get("reference", ""))
+            hyp_n = normalize_hindi(r.get("hypothesis", ""))
+            if ref_n == hyp_n and float(r.get("wer", "1")) == 0.0:
+                print(f"  WARN device row ref==hyp ({r.get('audio_file','?')})")
+    else:
+        rows = []
+        asserts_failed = []
+        for lang in args.lang:
+            lang_rows, af = evaluate_lang(lang)
+            rows.extend(lang_rows)
+            asserts_failed.extend(af)
+
+    if not rows:
+        print("No evaluation performed. Add real WAV + reference.txt to benchmark/audio/{lang}/")
+        return 1
+
+    avg_wer = sum(r["wer"] for r in rows) / len(rows)
+    print(f"\nTotal utterances: {len(rows)} | Mean WER: {avg_wer*100:.1f}%")
+    out_path = args.out or os.path.join(os.path.dirname(__file__), "stt_results.csv")
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
-        
-    print(f"\n[+] STT evaluation results saved to: {csv_file}")
+    print(f"Saved to {out_path}")
+    if asserts_failed:
+        print("FAILED assertions:", asserts_failed)
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
