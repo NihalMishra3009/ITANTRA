@@ -62,7 +62,19 @@ class BinaryPacketCodec {
      */
     fun encode(packet: TextPacket, sessionKey: ByteArray? = null, skipAuth: Boolean = false): ByteArray {
         val payloadBytes = packetPayloadBytes(packet)
-        val langIdx = LANG_INDEX.indexOf(packet.language).coerceAtLeast(0)
+        // Phase 7 security: an unknown language MUST NOT silently map to another
+        // language (e.g. Hindi). Reject the packet instead.
+        val langIdx = LANG_INDEX.indexOf(packet.language)
+        require(langIdx >= 0) { "unknown protocol language '${packet.language}' — packet rejected" }
+
+        // Payload length field is a 16-bit Short: hard cap at 32767 bytes.
+        require(payloadBytes.size <= 32767) {
+            "payload too large: ${payloadBytes.size} bytes (max 32767)"
+        }
+        // Unauthenticated (skipAuth) is only legal for the ECDH bootstrap handshake.
+        require(!skipAuth || packet.type == PacketType.SESSION_START) {
+            "unauthenticated encoding is only permitted for SESSION_START bootstrap (got ${packet.type})"
+        }
 
         val msgIdBytes = packet.messageId.toByteArray(StandardCharsets.UTF_8)
         val senderBytes = packet.senderId.toByteArray(StandardCharsets.UTF_8)
@@ -149,6 +161,8 @@ class BinaryPacketCodec {
             val hopCount = buf.get().toInt() and 0xFF
             val maxHops = buf.get().toInt() and 0xFF
             val ttlSecs = buf.int
+            if (ttlSecs < 0) return null              // invalid TTL (Phase 7)
+            if (hopCount > maxHops) return null       // looped packet (Phase 7)
 
             val senderLen = buf.get().toInt() and 0xFF
             if (senderLen < 0 || senderLen > bytes.size) return null
@@ -183,6 +197,8 @@ class BinaryPacketCodec {
             }
 
             val type = PacketType.values().getOrNull(typeOrd) ?: return null
+            // Phase 7: only the bootstrap handshake may travel unauthenticated.
+            if (isUnauth && type != PacketType.SESSION_START) return null
             val language = LANG_INDEX.getOrNull(langIdx) ?: return null
 
             val text = String(payload, StandardCharsets.UTF_8)
