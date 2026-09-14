@@ -39,8 +39,8 @@ class ModelDistributionManager(
         private const val TIMEOUT_MS = 20000
 
         /** Post-install smoke sentence (fixed, offline) exercised through the native engine. */
-        private const val SMOKE_SENTENCE = "नमस्ते"
-        private const val SMOKE_SENTENCE_ALT = "Hello"
+        private const val SMOKE_SENTENCE = "मुझे मदद चाहिए"
+        private const val SMOKE_SENTENCE_ALT = "I need help"
     }
 
     private val storage = ModelStorageManager(context.applicationContext)
@@ -467,10 +467,11 @@ class ModelDistributionManager(
                     throw IOException("Truncated $base ($written/${e.size} bytes)")
                 }
             }
-            // Required-file validation (role-appropriate).
+            // Required-file validation (role-appropriate). Flattened layout: the
+            // translator's ONNX files land at the pack ROOT (destRel=base above).
             if (packRole == ModelRole.TRANSLATION) {
-                val hasEnc = File(tmpExtract, "models/encoder_model.onnx").exists()
-                val hasDec = File(tmpExtract, "models/decoder_model.onnx").exists()
+                val hasEnc = File(tmpExtract, "encoder_model.onnx").exists()
+                val hasDec = File(tmpExtract, "decoder_model.onnx").exists()
                 val hasCfg = File(tmpExtract, "config.json").exists()
                 if (!hasEnc || !hasDec || !hasCfg) {
                     throw IOException("Translation archive incomplete: encoder/decoder/config missing")
