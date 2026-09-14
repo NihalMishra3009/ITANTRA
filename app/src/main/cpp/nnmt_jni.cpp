@@ -129,9 +129,11 @@ bool loadTokenizer(const std::string& dir, PackModel& m) {
 }
 
 // Marian-exact token ids (HF: EncodeAsIds returns exactly the model's ids).
+const int64_t MAX_INPUT_TOKENS = 512;  // encoder practical bound (Phase 6)
 std::vector<int64_t> tokenize(const std::string& text, const PackModel& m) {
     if (!m.spReady) return {};
     std::vector<int> ids32 = m.sp.EncodeAsIds(text);
+    if ((int64_t)ids32.size() > MAX_INPUT_TOKENS) return {};  // oversize -> caller MT_TOK_FAIL
     std::vector<int64_t> ids(ids32.begin(), ids32.end());
     return ids;
 }
@@ -166,6 +168,8 @@ void clearPair() {
 } // namespace
 
 static int64_t argmaxOverLogits(const std::vector<float>& logits, int64_t rowStart, int64_t vocabSize) {
+    if (rowStart < 0) return -1;
+    if ((size_t)(rowStart + vocabSize) > logits.size()) return -1;  // OOB guard (Phase 6)
     int64_t best = 0; float bestv = -1e30f;
     for (int64_t t = 0; t < vocabSize; ++t) {
         float x = logits[(size_t)(rowStart + t)];
@@ -324,6 +328,9 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         std::vector<float> logits((float*)logitsData, (float*)logitsData + T * vocabSize);
         g_ort->ReleaseValue(decOuts[0]);
         int64_t next = argmaxOverLogits(logits, (T - 1) * vocabSize, vocabSize);
+        // Pathological-logits / shape guard (Phase 6): an out-of-range argmax
+        // (all -inf logits, corrupt tensor) terminates generation safely.
+        if (next < 0 || next >= vocabSize) { done = true; break; }
         if (next == model.eos_id || next == model.pad_id) { done = true; break; }
         generated.push_back(next);
         decIds.push_back(next);

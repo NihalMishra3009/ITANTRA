@@ -100,19 +100,15 @@ class OpusMtTranslationEngine(
     private val selfTestDone = AtomicBoolean(false)
 
     /**
-     * One-time off-main native self-test (load lib + resolve ORT C API), triggered
-     * lazily on first model load rather than at construction — so creating an
-     * engine with no installed pack never spawns a thread (Phase 11).
-     * Logged so on-device ARM64 validation is observable in logcat (itan_mt).
-     * Failure is non-fatal — translation still reports UNAVAILABLE.
+     * One-time native self-test (load lib + resolve ORT C API), triggered
+     * synchronously on the FIRST model load, lazily — no background thread is
+     * ever created (Phase 5: no leaked executor). Load is cheap (System.loadLibrary
+     * + symbol resolve) and ensureLoaded runs on a worker thread already.
      */
     private fun onceSelfTest() {
         if (selfTestDone.compareAndSet(false, true)) {
             try {
-                java.util.concurrent.Executors.newSingleThreadExecutor().execute {
-                    val tag = "itan_mt"
-                    android.util.Log.i(tag, "nativeSelfTest -> " + nativeSelfTest())
-                }
+                android.util.Log.i("itan_mt", "nativeSelfTest -> " + nativeSelfTest())
             } catch (_: Throwable) {}
         }
     }
