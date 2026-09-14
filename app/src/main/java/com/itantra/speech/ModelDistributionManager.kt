@@ -37,10 +37,6 @@ class ModelDistributionManager(
         private const val TAG = "ModelDistribution"
         private const val CHUNK = 64 * 1024
         private const val TIMEOUT_MS = 20000
-
-        /** Post-install smoke sentence (fixed, offline) exercised through the native engine. */
-        private const val SMOKE_SENTENCE = "मुझे मदद चाहिए"
-        private const val SMOKE_SENTENCE_ALT = "I need help"
     }
 
     private val storage = ModelStorageManager(context.applicationContext)
@@ -76,31 +72,6 @@ class ModelDistributionManager(
         return com.itantra.speech.ModelStorageManager.isCompleteTranslationPackFiles(dir)
     }
 
-    /**
-     * Post-install smoke test (Phase 6): translate a fixed sentence through the
-     * real native engine. Returns true only if a non-blank output is produced.
-     */
-    private fun runTranslationSmoke(liveDir: File, pack: LanguageModelPack): Boolean {
-        val engine = smokeTestEngine ?: return false
-        val src = pack.language.code
-        val tgt = pack.targetLanguage?.code ?: return false
-        val sentence = if (src == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
-        return try {
-            // Run through the real offline engine; it serializes load+translate.
-            val res = engine.translate(sentence, src, tgt)
-            if (res.success && res.translatedText.isNotBlank()) {
-                Log.i(TAG, "Smoke test OK (${pack.id}): $sentence -> ${res.translatedText}")
-                true
-            } else {
-                Log.w(TAG, "Smoke test FAILED (${pack.id}): ${res.error}")
-                false
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Smoke test threw (${pack.id})", e)
-            false
-        }
-    }
-
     /** Current pack statuses (live, driven by storage + in-progress downloads). */
     private val statuses = java.util.concurrent.ConcurrentHashMap<String, PackStatus>()
 
@@ -111,7 +82,9 @@ class ModelDistributionManager(
 
     fun status(pack: LanguageModelPack): PackStatus {
         statuses[pack.id]?.let {
-            if (it in setOf(PackStatus.DOWNLOADING, PackStatus.VERIFYING, PackStatus.LOADING)) return it
+            if (it in setOf(
+                    PackStatus.DOWNLOADING, PackStatus.VERIFYING, PackStatus.SMOKE_TESTING,
+                    PackStatus.LOADING, PackStatus.FAILED, PackStatus.CORRUPTED)) return it
         }
         return if (pack.isEngine) {
             val dir = engineDir(pack)
@@ -173,6 +146,7 @@ class ModelDistributionManager(
 
         Thread {
             var conn: HttpURLConnection? = null
+            var backup: File? = null
             try {
                 conn = openDownload(url)
                 val code = conn!!.responseCode
@@ -237,38 +211,67 @@ class ModelDistributionManager(
                     throw IOException("Pack incomplete: missing required model/tokens files")
                 }
 
-                // Publish stage -> live pack dir atomically (same filesystem).
-                publish(stagingDir, if (pack.isEngine) engineDir(pack) else storage.roleDir(pack.role, lang))
+                // Staged smoke test BEFORE publish (Phase 1): run the real engine
+                // against the STAGED dir. If this fails, the old live model is
+                // untouched — nothing has been renamed yet.
+                if (pack.role == ModelRole.TRANSLATION) {
+                    setStatus(pack.id, PackStatus.SMOKE_TESTING)
+                    val stagedOk = smokeTestEngine?.testModelAt(
+                        stagingDir, pack.language.code,
+                        pack.targetLanguage?.code ?: "en") == true
+                    if (!stagedOk) {
+                        throw SmokeTestException("Translation smoke test failed for ${pack.id}")
+                    }
+                }
+
+                // Publish stage -> live pack dir, PRESERVING the current live model
+                // as a backup until the new one is verified.
+                val liveDir = if (pack.isEngine) engineDir(pack) else storage.roleDir(pack.role, lang)
+                backup = publishKeepingBackup(stagingDir, liveDir)
 
                 if (pack.isEngine) {
-                    writeEngineMetadata(pack, lang, engineDir(pack))
+                    writeEngineMetadata(pack, lang, liveDir)
                 } else {
                     storage.writeInstalledMetadata(pack.role, lang, pack.version, pack.checksumSha256)
                 }
                 tmpDir.deleteRecursively()
 
-                // Post-install smoke test (Phase 6): actually run the model. If it
-                // fails, roll back the freshly-published live dir so "Installed" is
-                // never shown for an unusable pack.
-                if (pack.role == ModelRole.TRANSLATION) {
-                    val liveDir = storage.roleDir(pack.role, lang)
-                    val okSmoke = smokeTestEngine != null && runTranslationSmoke(liveDir, pack)
-                    if (!okSmoke) {
-                        try { liveDir.deleteRecursively() } catch (_: Exception) {}
-                        throw IOException("Translation smoke test failed — model removed")
+                // Verify the newly-published LIVE pack before discarding the backup.
+                // On failure restore the previous working model (never leave a
+                // broken live pack and never lose the old one).
+                val liveOk = when {
+                    pack.isEngine -> {
+                        val hasOnnx = liveDir.listFiles()?.any { f ->
+                            f.isFile && f.name.lowercase().endsWith(".onnx")
+                        } == true
+                        File(liveDir, "tokens.txt").exists() && hasOnnx
                     }
+                    pack.role == ModelRole.TRANSLATION ->
+                        com.itantra.speech.ModelStorageManager.isCompleteTranslationPackFiles(liveDir)
+                    else -> storage.isCompletePack(liveDir, pack.role)
                 }
+                if (!liveOk) {
+                    restoreBackup(backup, liveDir)
+                    backup = null
+                    throw IOException("Published pack verification failed — previous model restored")
+                }
+
+                // New model confirmed: safe to discard the old backup.
+                try { backup?.deleteRecursively() } catch (_: Exception) {}
+                backup = null
 
                 setStatus(pack.id, PackStatus.INSTALLED)
                 onDone(Result.success(finalFile))
             } catch (e: CancelledException) {
                 Log.w(TAG, "Download of ${pack.id} cancelled")
                 cntryCleanup(tmpDir, tmpFile, stagingDir)
+                restoreBackup(backup, null)
                 setStatus(pack.id, PackStatus.NOT_INSTALLED)
                 onDone(Result.failure(e))
             } catch (e: Exception) {
                 Log.e(TAG, "Download of ${pack.id} failed: ${e.message}")
                 cntryCleanup(tmpDir, tmpFile, stagingDir)
+                restoreBackup(backup, null)
                 setStatus(pack.id,
                     if (e is ChecksumMismatchException) PackStatus.CORRUPTED else PackStatus.FAILED)
                 onDone(Result.failure(e))
@@ -279,35 +282,21 @@ class ModelDistributionManager(
     }
 
     /**
-     * Atomically publish a validated staging dir into the live pack dir. On same
-     * filesystem this is a rename; the previous (working) install is replaced only
-     * after the new content is fully in place, so an interrupted/ failed install
-     * never exposes a partial model.
+     * Atomically publish a validated staging dir into the live pack dir, keeping the
+     * previous live install as a backup (Phase 1 rollback invariant).
      */
-    private fun publish(stagingDir: File, liveDir: File) {
-        if (!stagingDir.exists()) throw IOException("Staging dir missing for publish")
-        // Preserve the current installation until replacement is ready.
-        val backup = File(liveDir.parentFile, liveDir.name + ".old")
-        try {
-            if (liveDir.exists() && backup.exists()) backup.deleteRecursively()
-            if (liveDir.exists()) liveDir.renameTo(backup)
-            if (!stagingDir.renameTo(liveDir)) {
-                // Cross-filesystem fallback (shouldn't happen — both under filesDir).
-                liveDir.mkdirs()
-                stagingDir.copyRecursively(liveDir, overwrite = true)
-                stagingDir.deleteRecursively()
-                backup.deleteRecursively()
-            } else {
-                backup.deleteRecursively()
-            }
-        } catch (e: Exception) {
-            // Roll back: restore the previous working install if publish failed.
-            try {
-                if (!liveDir.exists() && backup.exists()) backup.renameTo(liveDir)
-            } catch (_: Exception) {}
-            throw e
-        }
-    }
+    private fun publishKeepingBackup(stagingDir: File, liveDir: File): File? =
+        com.itantra.speech.ModelStorageManager.keepBackupPublish(stagingDir, liveDir)
+
+    /**
+     * Restore the pre-publish live model from [backup]. Called when the new pack
+     * fails any post-publish verification or a later install step throws.
+     */
+    private fun restoreBackup(backup: File?, liveDir: File?) =
+        com.itantra.speech.ModelStorageManager.restoreFromBackup(backup, liveDir)
+
+    /** Thrown when a staged model runs but fails the post-install smoke test. */
+    private class SmokeTestException(message: String) : IOException(message)
 
     private fun cntryCleanup(tmpDir: File, tmpFile: File, stagingDir: File) {
         // Keep staging on failure so a retry can resume; only delete the partial file.

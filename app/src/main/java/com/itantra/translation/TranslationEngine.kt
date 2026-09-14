@@ -54,6 +54,18 @@ interface TranslationEngine {
     fun modelKey(sourceLanguage: String, targetLanguage: String): String =
         "${sourceLanguage.lowercase()}-${targetLanguage.lowercase()}"
 
+    /**
+     * Smoke-test a model pack at an explicit directory WITHOUT mutating the active
+     * (live) model. Used by the installer to validate a staged pack before publish.
+     * Returns true only when the pack loads and produces a non-blank translation.
+     * Implementations must not change the pair that [translate] would use afterwards.
+     */
+    fun testModelAt(
+        modelDir: java.io.File,
+        sourceLanguage: String,
+        targetLanguage: String
+    ): Boolean = false
+
     fun isLoaded(): Boolean
 
     fun release()

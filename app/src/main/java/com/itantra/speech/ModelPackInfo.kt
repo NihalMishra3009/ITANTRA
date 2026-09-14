@@ -14,6 +14,7 @@ enum class PackStatus {
     NOT_INSTALLED,
     DOWNLOADING,
     VERIFYING,
+    SMOKE_TESTING,
     INSTALLED,
     LOADING,
     LOADED,

@@ -71,6 +71,11 @@ class OpusMtTranslationEngine(
         private const val NATIVE_LIB = "itantra_mt"
         private var nativeLoaded = false
         private var loadAttempted = false
+        @Volatile
+        private var nativeStateLock = Any()
+
+        private const val SMOKE_SENTENCE = "मुझे मदद चाहिए"
+        private const val SMOKE_SENTENCE_ALT = "I need help"
 
         /**
          * Parse the native envelope "__MT_OK__:<text>/__MT_ERR__:<code>|<msg>".
@@ -124,11 +129,11 @@ class OpusMtTranslationEngine(
         }
     }
 
-    private fun ensureNativeLoaded(): Boolean {
-        if (nativeLoaded) return true
-        if (loadAttempted) return false
+    private fun ensureNativeLoaded(): Boolean = synchronized(nativeStateLock) {
+        if (nativeLoaded) return@synchronized true
+        if (loadAttempted) return@synchronized false
         loadAttempted = true
-        return try {
+        try {
             System.loadLibrary(NATIVE_LIB)
             nativeLoaded = true
             Log.i(TAG, "Native MT adapter loaded: $NATIVE_LIB")
@@ -162,6 +167,34 @@ class OpusMtTranslationEngine(
         loadedKey = key
         loaded.set(true)
         return true
+    }
+
+    override fun testModelAt(
+        modelDir: File,
+        sourceLanguage: String,
+        targetLanguage: String
+    ): Boolean {
+        if (modelDir == null) return false
+        val enc = File(modelDir, "encoder_model.onnx").exists()
+        val dec = File(modelDir, "decoder_model.onnx").exists()
+        val cfg = File(modelDir, "config.json").exists()
+        if (!enc || !dec || !cfg) return false
+        if (!ensureNativeLoaded()) return false
+        val sentence = if (sourceLanguage.lowercase() == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
+        return try {
+            val native = parseNativeRaw(nnTranslate(modelDir.absolutePath, sentence))
+            val ok = native is NativeTranslateResult.Success &&
+                (native as NativeTranslateResult.Success).text.isNotBlank()
+            if (ok) Log.i(TAG, "Staged smoke test OK: $modelDir")
+            else Log.w(TAG, "Staged smoke test FAILED: $modelDir")
+            // Never leave the staged pair cached as the active pair.
+            release()
+            ok
+        } catch (e: Exception) {
+            Log.e(TAG, "Staged smoke test threw: $modelDir", e)
+            release()
+            false
+        }
     }
 
     override fun translate(

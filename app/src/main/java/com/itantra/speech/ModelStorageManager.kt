@@ -121,6 +121,55 @@ class ModelStorageManager(private val context: Context) {
         /** True for model-housekeeping file names (excluded from pack accounting). */
         fun isIgnoredHousekeeping(name: String): Boolean =
             name == VERSION_FILE || name == CHECKSUM_FILE || name == TMP_DIR
+
+        /**
+         * Phase 1 rollback: atomically publish [stagingDir] into [liveDir], keeping
+         * the previous live install as a backup. Returns the backup dir (null when
+         * there was no previous install). The caller must [restoreFromBackup] on any
+         * post-publish failure and delete the returned backup only AFTER the new live
+         * pack is verified — never before.
+         */
+        fun keepBackupPublish(stagingDir: File, liveDir: File): File? {
+            if (!stagingDir.exists() || !stagingDir.isDirectory) {
+                throw java.io.IOException("Staging dir missing for publish")
+            }
+            val backup = File(liveDir.parentFile, liveDir.name + ".old")
+            var backupCreated = false
+            try { if (backup.exists()) backup.deleteRecursively() } catch (_: Exception) {}
+            if (liveDir.exists()) {
+                if (!liveDir.renameTo(backup)) throw java.io.IOException("Could not preserve current model for backup")
+                backupCreated = true
+            }
+            try {
+                if (!stagingDir.renameTo(liveDir)) {
+                    liveDir.mkdirs()
+                    stagingDir.copyRecursively(liveDir, overwrite = true)
+                    stagingDir.deleteRecursively()
+                }
+            } catch (e: Exception) {
+                try { if (!liveDir.exists() && backup.exists()) backup.renameTo(liveDir) } catch (_: Exception) {}
+                throw e
+            }
+            return backup.takeIf { backupCreated }
+        }
+
+        /**
+         * Phase 1 rollback: restore the pre-publish live model from [backup].
+         * Any broken new [liveDir] is removed first; the old model wins.
+         */
+        fun restoreFromBackup(backup: File?, liveDir: File?) {
+            if (backup == null || !backup.exists()) return
+            try {
+                if (liveDir != null && liveDir.exists()) {
+                    liveDir.deleteRecursively()
+                }
+                val target = liveDir ?: File(backup.parentFile, backup.name.removeSuffix(".old"))
+                backup.renameTo(target)
+            } catch (e: Exception) {
+                // best-effort only; surface for diagnostics
+                android.util.Log.e("ModelStorageManager", "backup restore failed: ${e.message}")
+            }
+        }
     }
 
     /** True if the pack directory exists AND contains the required model files. */
