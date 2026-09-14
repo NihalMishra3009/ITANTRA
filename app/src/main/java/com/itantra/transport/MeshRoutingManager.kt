@@ -36,7 +36,8 @@ class MeshRoutingManager(
         private const val SEEN_CACHE_MAX_SIZE = 500
     }
 
-    private val coroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scopeJob = SupervisorJob()
+    private val coroutineScope = CoroutineScope(Dispatchers.IO + scopeJob)
     
     // Outbox: Messages waiting for delivery or ACK (deque allows priority prepend)
     private val outboxQueue = ConcurrentLinkedDeque<QueuedMessage>()
@@ -374,6 +375,14 @@ class MeshRoutingManager(
     fun getOutboxSnapshot(): List<QueuedMessage> = outboxQueue.toList()
 
     fun release() {
+        // Phase 8: cancel the COMPLETE scope (all coroutines, incl. retry watchers),
+        // not just the worker job. Idempotent: cancelling an already-cancelled job
+        // is a no-op.
         workerJob?.cancel()
+        workerJob = null
+        scopeJob.cancel()
+        outboxQueue.clear()
+        pendingAcks.values.forEach { it.complete(false) }
+        pendingAcks.clear()
     }
 }

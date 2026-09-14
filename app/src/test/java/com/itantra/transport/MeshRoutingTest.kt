@@ -138,4 +138,41 @@ class MeshRoutingTest {
 
         assertTrue("Emergency packet must be transmitted with a connected transport", transport.sentPackets.isNotEmpty())
     }
+
+    @Test
+    fun testEmergencyJumpsAheadOfQueuedNormal() {
+        val transport = MockTransport()
+        val node = MeshRoutingManager(myNodeId = "NODE_A", transportLayer = transport)
+
+        node.sendReliablePacket(TextPacket(
+            messageId = "normal1", senderId = "NODE_A", recipientId = "NODE_B",
+            language = "hi", text = "सामान्य संदेश"
+        )) {}
+        node.sendReliablePacket(TextPacket(
+            messageId = "urgent1", senderId = "NODE_A", recipientId = "NODE_B",
+            type = PacketType.EMERGENCY, language = "hi", text = "आपातकालीन", isPriority = true
+        )) {}
+
+        // Emergency is prepended to the outbox head — next worker pick is the SOS.
+        val snapshot = node.getOutboxSnapshot()
+        assertEquals("urgent1", snapshot.first().packet.messageId)
+        assertEquals("emergency sits before normal traffic", 2, snapshot.size)
+    }
+
+    @Test
+    fun testReleaseCancelsWholeScopeAndIsIdempotent() {
+        val transport = MockTransport()
+        val node = MeshRoutingManager(myNodeId = "NODE_A", transportLayer = transport)
+
+        node.sendReliablePacket(TextPacket(
+            messageId = "pending1", senderId = "NODE_A", recipientId = "NODE_B",
+            language = "hi", text = "पेंडिंग"
+        )) {}
+
+        node.release()
+        assertEquals("outbox cleared at release", 0, node.getOutboxSnapshot().size)
+        // Second release must be a safe no-op (no crash, no double-cancel race).
+        node.release()
+        node.release()
+    }
 }
