@@ -22,6 +22,11 @@ Note: latency is wall-clock on a mid-range Realme; RTF could not be computed bec
 Observed on receiver UI during a real two-device transmission (RMX → vivo):
 - E2E chip: **338 ms** (single hop, delivery to display; TTS was empty for Hindi so this excludes speech synthesis)
 
+> **Evidence caveat:** this was an informal UI observation (wall-clock difference
+> between sender and receiver display timestamps), NOT an instrumented measurement
+> using SystemClock.elapsedRealtimeNanos(). Per SIH Phase 12, a formally exported
+> CSV is required before this value is a "PASS" in the test matrix.
+
 ## Unit-Test Benchmarks
 
 - All 59 unit tests pass (protocol, security, mesh, location, VAD, delivery, speech selection).

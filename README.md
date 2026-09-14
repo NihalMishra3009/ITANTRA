@@ -194,7 +194,7 @@ iTantra/
 │   ├── test_mesh_routing.py           # multi-node store-and-forward test
 │   ├── evaluate_wer.py                # Word Error Rate (WER) benchmark
 │   ├── evaluate_latency.py            # per-stage latency benchmark
-│   └── evaluate_efficiency.py         # memory / CPU / APK footprint
+│   └── evaluate_wer.py / evaluate_latency.py   # real WER / latency runners
 │
 ├── docs/                         # Technical Architecture & Verification Documentation
 │   ├── ARCHITECTURE.md                # system design & module breakdown
@@ -257,10 +257,9 @@ python benchmark/test_ai4bharat_integration.py
 # Multi-node mesh & store-and-forward partition test
 python benchmark/test_mesh_routing.py
 
-# Accuracy & latency benchmarks
-python benchmark/evaluate_wer.py
-python benchmark/evaluate_latency.py
-python benchmark/evaluate_efficiency.py
+# Accuracy & latency benchmarks (real-data runners; see docs status)
+python benchmark/evaluate_wer.py          # needs real WAVs in benchmark/audio/{hi,en}
+python benchmark/evaluate_latency.py      # needs a device-instrumented export
 ```
 
 ### On-Device Verification

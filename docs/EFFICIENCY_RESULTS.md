@@ -1,28 +1,29 @@
 # Device Efficiency & Resource Footprint Results
+
 **iTantra — ISRO Problem Statement 26173**
 
----
+> **STATUS: NOT VERIFIED — the previous RAM/CPU/APK-size table was removed.**
+>
+> The old values (42.5 MB idle, 142.6 MB STT peak, 28.5% CPU, etc.) were not
+> measured on any physical device. They were hard-coded values in a now-deleted
+> `benchmark/evaluate_efficiency.py` and do not appear in this repo.
 
-## 1. Resource Consumption Overview
+## What can be stated honestly
 
-Tested on mid-range ARM64 Android devices running Android 12/13/14.
+| Metric | Status | Evidence |
+|--------|--------|----------|
+| RAM idle | NOT VERIFIED | requires Android profiler run |
+| RAM STT peak | NOT VERIFIED | — |
+| CPU VAD | NOT VERIFIED | — |
+| Debug APK size | IMPLEMENTED | measured at build time (assembleDebug output) |
+| Release APK size | IMPLEMENTED | measured at build time (assembleRelease output) |
+| Battery drain | NOT VERIFIED | — |
 
-### 1.1 Memory (RAM) Profile
-- **Idle / Background**: `42.5 MB` (Minimal footprint, radio listeners dormant)
-- **VAD Continuous Listening**: `68.2 MB` (Lightweight 32ms chunk buffer)
-- **PTT Active Recording**: `74.0 MB` (Ring buffer active)
-- **STT Inference Peak**: `142.6 MB - 148.0 MB` (Int8 quantized model in RAM)
-- **TTS Synthesis Peak**: `118.4 MB` (Waveform synthesis & AudioTrack buffer)
-- **Peak Aggregate RAM**: `< 160 MB` (Safely fits within low-end 2GB/3GB RAM Android phones)
+### APK size (build-time honest)
 
-### 1.2 CPU Utilization
-- **Idle State**: `< 1.0%`
-- **Continuous VAD Listening**: `3.4%` (Low battery drain during continuous monitoring)
-- **Active Transcription (STT Burst)**: `28.5%` (Multi-threaded 2-core burst for ~300ms)
-- **TTS Synthesis**: `18.0%`
+Debug APK includes all 4 ABIs + all bundled assets (Whisper int8 encoder/decoder,
+Bengali VITS, Silero VAD). Release APK with ABI split = single-ABI only.
 
-### 1.3 Application & Model Footprint
-- **Debug APK Size**: `~83.4 MB` (Bundles C++ native `.so` runtimes for all 4 ABIs: arm64-v8a, armeabi-v7a, x86, x86_64)
-- **Production AAB / Single-ABI Split Size**: `< 22.5 MB`
-
-Raw efficiency metrics are saved in [`benchmark/efficiency.csv`](file:///c:/Users/nihal/OneDrive/Desktop/demo/benchmark/efficiency.csv).
+To measure real efficiency: use Android Profiler, record RAM/CPU from a single
+instrumented session, export the CSV, then update this page. Per SIH Phase 12,
+no number is published before a physical measurement exists.

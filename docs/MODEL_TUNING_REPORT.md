@@ -111,16 +111,13 @@ To prevent audible pop/click artifacts when starting and stopping audio playback
 
 ## 6. Performance Benchmarks: Before vs. After Tuning
 
-| Metric | Unoptimized Baseline (FP32) | Tuned & Quantized (iTantra) | Improvement |
-|---|---|---|---|
-| **STT Latency (Hindi)** | 380.0 ms | **82.4 ms** | **4.6x Faster** |
-| **STT Latency (Marathi)** | 392.0 ms | **81.2 ms** | **4.8x Faster** |
-| **TTS Latency** | 410.0 ms | **98.2 ms** | **4.1x Faster** |
-| **VAD Execution Time** | 8.5 ms / frame | **1.8 ms / frame** | **4.7x Faster** |
-| **RAM Footprint (Heap)** | 640 MB | **142 MB** | **77.8% Reduction** |
-| **Model Size on Disk** | 580 MB | **Int8 Mobile Assets** | **75.5% Reduction** |
-| **Word Error Rate (WER)** | 7.9% | **8.4%** | **0.5% Delta (Negligible)** |
-| **Active Battery Consumption** | 18.2% / hour | **4.2% / hour** | **76.9% Energy Saved** |
+> **REMOVED: the "Before vs After" table previously published hard-coded latency,
+> RAM, WER, and battery values that were never measured on any device. Per SIH
+> Phase 22, fabricated numbers are not documentation. No STT-latency / TTS-latency /
+> RAM / battery figure in this document is a measured value.
+
+Status of every quantitative claim in this section: **NOT VERIFIED** (would
+require the SIH Phase 11/12 real-instrumentation runs on a physical device).
 
 ---
 
@@ -128,8 +125,6 @@ To prevent audible pop/click artifacts when starting and stopping audio playback
 
 The benchmark results in this report can be re-validated by running:
 ```powershell
-python benchmark/verify_ai4bharat_complete.py
-python benchmark/evaluate_efficiency.py
-python benchmark/evaluate_latency.py
-python benchmark/evaluate_wer.py
+python benchmark/evaluate_wer.py        # real data runner
+python benchmark/evaluate_latency.py    # real data runner
 ```
