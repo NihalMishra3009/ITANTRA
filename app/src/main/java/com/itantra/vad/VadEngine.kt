@@ -44,23 +44,15 @@ class VadEngine(
     private var isSileroLoaded = false
     private val window = ArrayDeque<Float>(WINDOW_SIZE * 2)
 
-    private var isSpeaking = false
-    private var silenceStartTimeMs: Long = 0L
-    private var speechStartTimeMs: Long = 0L
-    private var lastEvaluationMs: Long = 0L
     private var lastDiagLogMs: Long = 0L
     private var lastSpeechProb = 0.0f
 
-    // Adaptive noise-floor tracking (energy VAD): the threshold adapts slowly to
-    // ambient noise so an office fan / vehicle rumble does not false-positive.
-    private var noiseFloor = 0.008f
-    private var hangoverRemainingMs = 0L // post-speech hold so short gaps don't split a word
-
-    /** Minimum sustained speech before a VOICE_ON decision counts (ms). */
-    var minSpeechDurationMs: Long = 120L
-
-    /** Hold speech active this long after the last voiced frame (ms). */
-    var hangoverMs: Long = 180L
+    private val stateMachine = VadStateMachine(
+        speechThreshold = speechThreshold,
+        shortPauseMs = shortPauseMs,
+        sentenceEndMs = sentenceEndMs,
+        longSilenceMs = longSilenceMs
+    )
 
     init {
         initializeSilero()
@@ -99,72 +91,19 @@ class VadEngine(
         // not jump on clock changes and always uses true audio-session timing.
         val now = android.os.SystemClock.elapsedRealtime()
 
-        // Energy VAD is the ACTIVE detector. The bundd Silero model is attempted at
-        // init; it executes under the bundled ORT, but neural VAD is only promoted
-        // to primary after a PASSING live speech/silence discrimination test on the
-        // physical device (SIH Phase 8). Until then: Adaptive Energy VAD, reported
-        // honestly (isUsingNeuralVad() == false).
+        // Energy VAD is the ACTIVE detector. The Silero model is attempted at init;
+        // neural VAD is only promoted to primary after a passing live speech/silence
+        // discrimination test on a physical device (SIH Phase 8). Until then:
+        // Adaptive Energy VAD, reported honestly (isUsingNeuralVad() == false).
         val rawProb = runEnergyVad(audioChunk)
+        val event = stateMachine.process(now, rawProb, audioChunk.size)
         lastSpeechProb = rawProb
-
-        // Adaptive noise floor: during silence, slowly raise/low the floor to track
-        // ambient background (fan, AC, vehicle). Never above the speech threshold.
-        if (rawProb < speechThreshold) {
-            // quiet region: nudge floor toward the observed RMS energy
-            noiseFloor = (noiseFloor * 0.95f + rawProb * 0.05f).coerceIn(0.003f, speechThreshold * 0.6f)
-        }
 
         if (now - lastDiagLogMs >= 500) {
             lastDiagLogMs = now
-            Log.d("VadDiag", "prob=$lastSpeechProb floor=$noiseFloor isSpeaking=$isSpeaking")
+            Log.d("VadDiag", "prob=$lastSpeechProb floor=${stateMachine.noiseFloor} speaking=${stateMachine.isSpeaking}")
         }
-
-        // Voice decision = prob above a floor-relative threshold. While silence is
-        // held (hangover), keep the utterance alive so intra-word gaps don't split.
-        val dynamicThreshold = (speechThreshold * 0.5f + noiseFloor * 0.5f)
-        val isChunkSpeech = rawProb >= dynamicThreshold
-        if (isChunkSpeech) {
-            hangoverRemainingMs = hangoverMs
-        } else if (hangoverRemainingMs > 0) {
-            hangoverRemainingMs -= WINDOW_SIZE * 1000L / SAMPLE_RATE
-        }
-        val effectivelySpeaking = isChunkSpeech || hangoverRemainingMs > 0
-
-        if (effectivelySpeaking) {
-            silenceStartTimeMs = 0L
-            if (!isSpeaking) {
-                isSpeaking = true
-                speechStartTimeMs = now
-                lastEvaluationMs = now
-                // Suppress micro speech blips (key clicks/transients): only start real
-                // speech detection after a short minimum duration.
-                return if (now - speechStartTimeMs >= minSpeechDurationMs || audioChunk.size >= SAMPLE_RATE / 4) {
-                    VadEvent.SPEECH_START
-                } else VadEvent.SHORT_PAUSE
-            }
-            lastEvaluationMs = now
-            return VadEvent.SPEECH_CONTINUE
-        }
-
-        // --- Not speech (silence region) ---
-        if (!isSpeaking) return VadEvent.SILENCE
-
-        // We WERE speaking and now hit sustained silence — apply endpointing tiers.
-        val silenceDuration = now - silenceStartTimeMs
-        val tier = if (silenceStartTimeMs == 0L) {
-            silenceStartTimeMs = now
-            VadEvent.SHORT_PAUSE
-        } else when {
-            silenceDuration >= longSilenceMs -> VadEvent.LONG_SILENCE
-            silenceDuration >= sentenceEndMs -> VadEvent.SENTENCE_END
-            else -> VadEvent.SHORT_PAUSE
-        }
-        if (tier == VadEvent.LONG_SILENCE || tier == VadEvent.SENTENCE_END) {
-            isSpeaking = false
-            silenceStartTimeMs = 0L
-            hangoverRemainingMs = 0L
-        }
-        return tier
+        return event
     }
 
     private fun runSileroWindowed(audioChunk: FloatArray): Float {
@@ -206,14 +145,16 @@ class VadEngine(
         val rms = Math.sqrt(sumSquares / audioChunk.size).toFloat()
         // Heavy clipping (mic saturation) means real speech even if RMS looks odd.
         if (clippedSamples.toFloat() / audioChunk.size > 0.10f) return 0.95f
-        // Relative to the adaptive noise floor: mid/high speech always exceeds it.
-        val rel = (rms - noiseFloor).coerceAtLeast(0f)
+        // Relative to the adaptive noise floor (state machine): mid/high speech
+        // always exceeds it.
+        val floor = stateMachine.noiseFloor
+        val rel = (rms - floor).coerceAtLeast(0f)
         return when {
             rms > 0.020f -> 0.9f
             rms > 0.012f -> 0.68f
             rms > 0.008f -> 0.56f
             // Clearly above the ambient floor (e.g. 3x floor) = soft speech
-            rel > noiseFloor * 2.5f -> (0.35f + rel).coerceAtMost(0.6f)
+            rel > floor * 2.5f -> (0.35f + rel).coerceAtMost(0.6f)
             else -> (rel * 2.0f).coerceAtMost(0.05f)
         }
     }
@@ -222,12 +163,8 @@ class VadEngine(
     fun isUsingNeuralVad(): Boolean = false
 
     fun reset() {
-        isSpeaking = false
-        silenceStartTimeMs = 0L
-        speechStartTimeMs = 0L
-        lastEvaluationMs = 0L
+        stateMachine.reset()
         lastSpeechProb = 0.0f
-        hangoverRemainingMs = 0L
         window.clear()
         sileroVad?.reset()
     }

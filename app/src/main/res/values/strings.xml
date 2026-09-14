@@ -9,7 +9,7 @@
     <string name="ptt_hold_to_talk">PRESS TO TALK</string>
     <string name="ptt_release_to_send">RELEASE TO SEND</string>
     <string name="listening_active">LISTENING</string>
-    <string name="listening_vad">LISTENING • VAD</string>
+    <string name="listening_vad">LISTENING • ADAPTIVE ENERGY VAD</string>
 
     <!-- Core status labels -->
     <string name="standby_ready">READY</string>
