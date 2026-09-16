@@ -122,6 +122,17 @@ class ModelStorageManager(private val context: Context) {
         fun isIgnoredHousekeeping(name: String): Boolean =
             name == VERSION_FILE || name == CHECKSUM_FILE || name == TMP_DIR
 
+        /** SHA-256 of a file (pure, JVM-safe). */
+        fun sha256File(file: File): String {
+            val digest = java.security.MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                var n: Int
+                while (input.read(buf).also { n = it } != -1) digest.update(buf, 0, n)
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+
         /**
          * Phase 11 archive-entry policy: an entry path is safe only when it is
          * relative, free of any ".." segment, absolute/backslash forms, drive

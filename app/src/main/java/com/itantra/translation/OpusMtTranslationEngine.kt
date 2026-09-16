@@ -33,31 +33,37 @@ import java.util.concurrent.atomic.AtomicBoolean
 sealed class NativeTranslateResult {
     data class Success(val raw: String) : NativeTranslateResult() {
         val text: String get() = raw.substringBefore('\n')
-        val timing: TranslationTiming? = parseTiming(raw)
-        private fun parseTiming(raw: String): TranslationTiming? {
-            var tok = 0L; var enc = 0L; var dec = 0L; var total = 0L
-            for (line in raw.split('\n')) {
-                when {
-                    line.startsWith("__mttok=") -> tok = line.removePrefix("__mttok=").trim().toLongOrNull() ?: 0L
-                    line.startsWith("__mtenc=") -> enc = line.removePrefix("__mtenc=").trim().toLongOrNull() ?: 0L
-                    line.startsWith("__mtdec=") -> dec = line.removePrefix("__mtdec=").trim().toLongOrNull() ?: 0L
-                    line.startsWith("__mtall=") -> total = line.removePrefix("__mtall=").trim().toLongOrNull() ?: 0L
+val timing: TranslationTiming? = parseTiming(raw)
+            private fun parseTiming(raw: String): TranslationTiming? {
+                var tok = 0L; var enc = 0L; var dec = 0L; var total = 0L
+                var inT = 0; var outT = 0
+                for (line in raw.split('\n')) {
+                    when {
+                        line.startsWith("__mttok=") -> tok = line.removePrefix("__mttok=").trim().toLongOrNull() ?: 0L
+                        line.startsWith("__mtenc=") -> enc = line.removePrefix("__mtenc=").trim().toLongOrNull() ?: 0L
+                        line.startsWith("__mtdec=") -> dec = line.removePrefix("__mtdec=").trim().toLongOrNull() ?: 0L
+                        line.startsWith("__mtall=") -> total = line.removePrefix("__mtall=").trim().toLongOrNull() ?: 0L
+                        line.startsWith("__mtin=") -> inT = line.removePrefix("__mtin=").trim().toIntOrNull() ?: 0
+                        line.startsWith("__mtout=") -> outT = line.removePrefix("__mtout=").trim().toIntOrNull() ?: 0
+                    }
                 }
+                return if (tok > 0 || enc > 0 || dec > 0 || total > 0)
+                    TranslationTiming(tok, enc, dec, total, inT, outT) else null
             }
-            return if (tok > 0 || enc > 0 || dec > 0 || total > 0) TranslationTiming(tok, enc, dec, total) else null
-        }
     }
     data class Error(val code: Int, val message: String) : NativeTranslateResult() {
-        fun userMessage(): String = when (code) {
-            101 -> "Translation produced empty input"
-            102 -> "Offline translation model failed to load (no ONNX runtime)"
-            103 -> "Translation model pack invalid"
-            104 -> "Offline translation model failed to load"
-            106 -> "Encoder/decoder model failed to load"
-            111 -> "Tokenization failed"
-            150 -> "Offline translation failed"
-            else -> message.ifBlank { "Offline translation failed" }
-        }
+fun userMessage(): String = when (code) {
+                101 -> "Translation produced empty input"
+                102 -> "Offline translation model failed to load (no ONNX runtime)"
+                103 -> "Translation model pack invalid"
+                104 -> "Offline translation model failed to load"
+                106 -> "Encoder/decoder model failed to load"
+                111 -> "Tokenization failed"
+                112 -> "Input too long for translation"
+                113 -> "Translation output limit reached"
+                150 -> "Offline translation failed"
+                else -> message.ifBlank { "Offline translation failed" }
+            }
     }
 }
 
@@ -145,6 +151,7 @@ class OpusMtTranslationEngine(
 
     override fun isLoaded(): Boolean = loaded.get()
 
+    @Synchronized
     fun ensureLoaded(sourceLanguage: String, targetLanguage: String): Boolean {
         val key = modelKey(sourceLanguage, targetLanguage)
         if (loaded.get() && loadedKey == key) return true
@@ -227,8 +234,10 @@ class OpusMtTranslationEngine(
         }
     }
 
+    @Synchronized
     override fun release() {
-        // Release cached native sessions for the pair.
+        // Release cached native sessions for the pair (idempotent + reentrant-safe:
+        // the Kotlin-level lock serializes with ensureLoaded/translate).
         try { if (nativeLoaded) nnRelease() } catch (_: Throwable) {}
         loadedKey = null
         loaded.set(false)

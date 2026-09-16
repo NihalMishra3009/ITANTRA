@@ -60,13 +60,25 @@ class ModelDistributionManager(
     private fun validateTranslationManifest(dir: File): Boolean {
         val manifest = File(dir, "manifest.json")
         if (manifest.exists()) {
-            val required = com.itantra.speech.ModelStorageManager.translationRequiredFiles
-            val okFormat = try {
-                val j = org.json.JSONObject(manifest.readText())
-                j.optString("format") == "itantra-mt-pack-v1"
-            } catch (_: Exception) { false }
-            val okFiles = required.all { File(dir, it).exists() }
-            return okFormat && okFiles
+            val j = try { org.json.JSONObject(manifest.readText()) } catch (_: Exception) { return false }
+            if (j.optString("format") != "itantra-mt-pack-v1") return false
+            val reqFiles = j.optJSONArray("required_files") ?: return false
+            val hashes = j.optJSONObject("file_hashes")
+            var ok = true
+            var i = 0
+            while (i < reqFiles.length() && ok) {
+                val rel = reqFiles.getString(i)
+                val f = File(dir, rel)
+                if (!f.exists()) {
+                    ok = false
+                } else if (hashes != null && hashes.has(rel)) {
+                    val expected = hashes.optString(rel)
+                    val actual = com.itantra.speech.ModelStorageManager.sha256File(f)
+                    ok = expected.equals(actual, ignoreCase = true)
+                }
+                i++
+            }
+            return ok
         }
         // Legacy pack (no manifest): enforce the same runtime contract.
         return com.itantra.speech.ModelStorageManager.isCompleteTranslationPackFiles(dir)
@@ -372,6 +384,11 @@ class ModelDistributionManager(
         }
         val tar = org.apache.commons.compress.archivers.tar.TarArchiveInputStream(bz2)
         val tmpExtract = File(targetDir, ModelStorageManager.TMP_DIR).apply { mkdirs() }
+        // Phase 3 resource caps: a hostile archive must not exhaust disk or inodes.
+        val MAX_ENTRIES = 8000
+        val MAX_EXTRACTED_BYTES = 6L * 1024 * 1024 * 1024  // 6 GiB hard ceiling
+        var entryCount = 0
+        var extractedBytes = 0L
         try {
             var entry: org.apache.commons.compress.archivers.tar.TarArchiveEntry?
             var onnxFound = false
@@ -381,7 +398,12 @@ class ModelDistributionManager(
             var lastProgress = -1
             val buf = ByteArray(128 * 1024)
             while (tar.nextEntry.also { entry = it } != null) {
+                if (++entryCount > MAX_ENTRIES) throw IOException("Archive exceeded entry cap ($MAX_ENTRIES)")
                 val e = entry ?: continue
+                if (!e.isDirectory) {
+                    extractedBytes += e.size
+                    if (extractedBytes > MAX_EXTRACTED_BYTES) throw IOException("Archive exceeded extracted-bytes cap")
+                }
                 val path = e.name
                 // Phase 11 path-traversal hardening: a single policy gate before any
                 // extraction decision. Unsupported entries are refused, never st3Aged.

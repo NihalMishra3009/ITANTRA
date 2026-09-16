@@ -53,7 +53,9 @@ data class TranslationTiming(
     val tokenizerMicros: Long,
     val encoderMicros: Long,
     val decoderMicros: Long,
-    val totalMicros: Long
+    val totalMicros: Long,
+    val inputTokens: Int = 0,
+    val outputTokens: Int = 0
 )
 
 /**

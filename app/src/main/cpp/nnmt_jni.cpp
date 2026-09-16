@@ -190,11 +190,13 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnNativeTest(JNIEnv* env, j
 // Failure:  "__MT_ERR__:<code>|<message>"
 // codes: 101 empty input | 102 no ort | 103 bad pack | 104 no env/opts
 //        105 optlevel | 106 session load | 107 no mem | 108 enc run
-//        109 shape | 110 dec run | 111 tokenize fail | 150 runtime
+//        109 shape | 110 dec run | 111 tokenize fail | 112 input too long
+//        113 output limit/runaway | 150 runtime
 enum MtErrCode { MT_EMPTY_INPUT = 101, MT_NO_ORT = 102, MT_BAD_PACK = 103,
                  MT_NO_ENV = 104, MT_OPTLEVEL = 105, MT_SESSION_LOAD = 106,
                  MT_NO_MEM = 107, MT_ENC_RUN = 108, MT_SHAPE = 109,
-                 MT_DEC_RUN = 110, MT_TOK_FAIL = 111, MT_RUNTIME = 150 };
+                 MT_DEC_RUN = 110, MT_TOK_FAIL = 111, MT_INPUT_TOO_LONG = 112,
+                 MT_OUTPUT_LIMIT = 113, MT_RUNTIME = 150 };
 
 static jstring mtErr(JNIEnv* env, int code, const char* msg) {
     char buf[256];
@@ -221,6 +223,8 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
     env->ReleaseStringUTFChars(jModelDir, dirC);
     env->ReleaseStringUTFChars(jText, textC);
     if (dir.empty() || text.empty()) return mtErr(env, MT_EMPTY_INPUT, "empty input");
+    const size_t MAX_INPUT_CHARS = 4096;
+    if (text.size() > MAX_INPUT_CHARS) return mtErr(env, MT_INPUT_TOO_LONG, "input too long");
 
     std::lock_guard<std::mutex> lk(g_mtx);  // serialize load + translate (P1)
 
@@ -311,6 +315,8 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
             encShape2.data(), 3, ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT, &encHiddenIn))) {
         g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_NO_MEM, "cpu memory info failed");
     }
+    const int64_t MAX_REPEAT_STREAK = 12;  // runaway-repetition guard (Phase 7)
+    int64_t lastRepeatId = -1, repeatStreak = 0;
     while (steps < maxSteps && !done) {
         std::vector<int64_t> decShape = {1, (int64_t)decIds.size()};
         OrtValue* decIdsIn = nullptr;
@@ -324,14 +330,40 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         g_ort->ReleaseValue(decIdsIn);
         if (!okd) { g_ort->ReleaseValue(encHiddenIn); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_DEC_RUN, "decoder run failed"); }
         void* logitsData = nullptr; g_ort->GetTensorMutableData(decOuts[0], &logitsData);
-        int64_t T = (int64_t)decIds.size();
-        std::vector<float> logits((float*)logitsData, (float*)logitsData + T * vocabSize);
+        // Clamp to the ACTUAL output tensor shape — a malformed/mismatched model must
+        // never cause us to read past the returned buffer (Phase 6/7).
+        OrtTensorTypeAndShapeInfo* linfo = nullptr;
+        int64_t tDim = (int64_t)decIds.size();
+        int64_t vDim = vocabSize;
+        if (check(g_ort->GetTensorTypeAndShape(decOuts[0], &linfo))) {
+            size_t lndim = 0; g_ort->GetDimensionsCount(linfo, &lndim);
+            std::vector<int64_t> ldims(lndim, 0); g_ort->GetDimensions(linfo, ldims.data(), lndim);
+            g_ort->ReleaseTensorTypeAndShapeInfo(linfo);
+            if (lndim >= 2) { if (ldims[lndim-2] > 0) tDim = std::min<int64_t>(tDim, ldims[lndim-2]); if (ldims[lndim-1] > 0) vDim = std::min<int64_t>(vDim, ldims[lndim-1]); }
+            else { g_ort->ReleaseValue(encHiddenIn); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_SHAPE, "decoder logits shape invalid"); }
+        } else {
+            g_ort->ReleaseValue(encHiddenIn); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_SHAPE, "decoder logits shape read failed");
+        }
+        size_t safeCount = (size_t)(tDim) * (size_t)(vDim);
+        if ((size_t)(tDim) != 0 && safeCount / (size_t)(tDim) != (size_t)(vDim)) {  // overflow guard
+            g_ort->ReleaseValue(encHiddenIn); g_ort->ReleaseMemoryInfo(mem); return mtErr(env, MT_SHAPE, "logits size overflow");
+        }
+        std::vector<float> logits((float*)logitsData, (float*)logitsData + safeCount);
         g_ort->ReleaseValue(decOuts[0]);
-        int64_t next = argmaxOverLogits(logits, (T - 1) * vocabSize, vocabSize);
+        int64_t next = argmaxOverLogits(logits, (tDim - 1) * vDim, vDim);
         // Pathological-logits / shape guard (Phase 6): an out-of-range argmax
         // (all -inf logits, corrupt tensor) terminates generation safely.
         if (next < 0 || next >= vocabSize) { done = true; break; }
         if (next == model.eos_id || next == model.pad_id) { done = true; break; }
+        // Runaway-repetition guard (Phase 7): stop if the same token repeats many
+        // times — pathological models must not loop forever within a sentence.
+        if (!generated.empty() && generated.back() == next) {
+            lastRepeatId = next;
+            if (++repeatStreak >= MAX_REPEAT_STREAK) { done = true; break; }
+        } else {
+            repeatStreak = 0;
+            lastRepeatId = -1;
+        }
         generated.push_back(next);
         decIds.push_back(next);
         steps++;
@@ -349,10 +381,12 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
 
     g_ort->ReleaseMemoryInfo(mem);
 
-    char meta[160];
-    snprintf(meta, sizeof(meta), "\n__mttok=%lld\n__mtenc=%lld\n__mtdec=%lld\n__mtall=%lld",
+    char meta[220];
+    snprintf(meta, sizeof(meta),
+             "\n__mttok=%lld\n__mtenc=%lld\n__mtdec=%lld\n__mtall=%lld\n__mtin=%lld\n__mtout=%lld",
              (long long)(tTok / 1000), (long long)(tEnc / 1000),
-             (long long)(tDec / 1000), (long long)(nowNs() - t0) / 1000);
+             (long long)(tDec / 1000), (long long)(nowNs() - t0) / 1000,
+             (long long)ids.size(), (long long)generated.size());
     std::string res = out + meta;
     return mtOk(env, res);
 }

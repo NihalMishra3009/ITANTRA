@@ -162,3 +162,42 @@ class TranslationFailureTest {
         assertFalse(out is CrossLanguagePipeline.Outcome.Translated)
     }
 }
+
+/** Phase 17: STT→translation handoff must preserve Devanagari, punctuation,
+ * numbers, spaces and sentence boundaries — the pipeline must NOT normalize. */
+class PipelineUnicodePreservationTest {
+    @Test
+    fun testDevanagariAndPunctuationPassThroughUntouched() {
+        val fn = { s: String, src: String, tgt: String ->
+            TranslationResult(s, src, tgt, 7L, success = true)
+        }
+        val text = "कृपया मुझे स्टेशन तक जाने का रास्ता बताइए। (850), 'रास्ता' 2.5%?"
+        val out = CrossLanguagePipeline.apply(text, SupportedLanguage.HINDI, SupportedLanguage.ENGLISH, fn)
+        assertTrue(out is CrossLanguagePipeline.Outcome.Translated)
+        assertEquals("pipeline must pass the exact (un-normalized) bytes",
+            text, (out as CrossLanguagePipeline.Outcome.Translated).text)
+    }
+
+    @Test
+    fun testEnglishNumbersWhitespaceAndNewlinesPreserved() {
+        val fn = { s: String, src: String, tgt: String ->
+            TranslationResult(s, src, tgt, 7L, success = true)
+        }
+        val text = "Floor 3, west wing.\nCall 108 now.   see you — later"
+        val out = CrossLanguagePipeline.apply(text, SupportedLanguage.ENGLISH, SupportedLanguage.HINDI, fn)
+        assertTrue(out is CrossLanguagePipeline.Outcome.Translated)
+        assertEquals(text, (out as CrossLanguagePipeline.Outcome.Translated).text)
+    }
+
+    @Test
+    fun testEmptyOutputFromEngineIsNotPassedAsSuccess() {
+        // An engine that returns blank text but success=true must not be treated
+        // as a translation — the pipeline reports unavailable instead.
+        val fn = { _: String, src: String, tgt: String ->
+            TranslationResult("", src, tgt, 0L, success = true)
+        }
+        val out = CrossLanguagePipeline.apply("hello", SupportedLanguage.ENGLISH, SupportedLanguage.HINDI, fn)
+        assertTrue("blank generated output is not a usable translation",
+            out is CrossLanguagePipeline.Outcome.Unavailable)
+    }
+}

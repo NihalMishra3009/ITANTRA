@@ -91,7 +91,9 @@ def main():
         "source_language": src,
         "target_language": tgt,
         "model_id": model_id,
+        "model_family": "Helsinki-NLP Opus-MT (Marian)",
         "model_version": "opus-mt-2024",
+        "architecture": "encoder-decoder (seq2seq, greedy decode)",
         "license": "Apache-2.0 (Helsinki-NLP Opus-MT)",
         "required_files": [
             "models/encoder_model.onnx",
@@ -192,6 +194,17 @@ def main():
         },
     )
     print("[onnx] decoder ->", dec_path)
+
+    # Add per-file SHA-256 hashes AFTER the ONNX graphs exist (Phase 2).
+    import hashlib
+    def sha256_file(rel):
+        with open(os.path.join(out_dir, rel), "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    manifest["file_hashes"] = {rel: sha256_file(rel) for rel in manifest["required_files"]}
+    with open(os.path.join(out_dir, "manifest.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print("[manifest] file_hashes added")
+
     print("DONE ->", out_dir)
 
     # ---- Python-side validation with the REAL tokenizer, before Android ----
