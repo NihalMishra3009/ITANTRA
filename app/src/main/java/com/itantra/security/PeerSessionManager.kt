@@ -33,6 +33,18 @@ object PeerSessionManager {
     private val pendingHandshakes = ConcurrentHashMap<String, PrivateKey>()
 
     /**
+     * A phone that auto-connects to several neighbours sends ONE broadcast SESSION_START
+     * ("*") and then receives a reply from each of them. The ephemeral key behind that
+     * broadcast must therefore stay usable for every reply, not just the first: consuming
+     * it on the first reply made every later neighbour derive a different secret, so its
+     * packets failed authentication and were silently dropped. The key is kept for this
+     * window (and reused if another broadcast starts inside it), then forgotten.
+     */
+    private const val BROADCAST_HANDSHAKE_WINDOW_MS = 30_000L
+    private var broadcastPub: String? = null
+    private var broadcastStartedAt = 0L
+
+    /**
      * Store a session key for a specific peer.
      * Called after ECDH key agreement completes.
      */
@@ -75,9 +87,27 @@ object PeerSessionManager {
      * Initiate an ECDH handshake with a peer. Returns the ephemeral public key
      * to send in a SESSION_START packet.
      */
+    /** Test seam: pretend the broadcast-handshake window has elapsed. */
+    @Synchronized
+    internal fun expireBroadcastWindowForTest() { broadcastStartedAt = 0L }
+
+    @Synchronized
     fun initiateHandshake(peerNodeId: String): String {
+        val now = System.currentTimeMillis()
+        if (peerNodeId == "*") {
+            val pub = broadcastPub
+            if (pub != null && pendingHandshakes.containsKey("*") &&
+                now - broadcastStartedAt < BROADCAST_HANDSHAKE_WINDOW_MS
+            ) {
+                return pub // a broadcast handshake is already in flight: reuse its key
+            }
+        }
         val (pubB64, priv) = MessageSecurityManager.createEphemeralKeyPairBase64()
         pendingHandshakes[peerNodeId] = priv
+        if (peerNodeId == "*") {
+            broadcastPub = pubB64
+            broadcastStartedAt = now
+        }
         return pubB64
     }
 
@@ -97,7 +127,11 @@ object PeerSessionManager {
     fun handleHandshake(peerNodeId: String, peerPubKeyB64: String): HandshakeResult? {
         return try {
             val peerPub = Base64Codec.decode(peerPubKeyB64)
-            var pendingPriv = pendingHandshakes.remove(peerNodeId)
+            // Broadcast key first: it is always the freshest. A per-peer entry can only be stale.
+            val inWindowNow = System.currentTimeMillis() - broadcastStartedAt < BROADCAST_HANDSHAKE_WINDOW_MS
+            var pendingPriv = if (inWindowNow) pendingHandshakes["*"] else null
+            val perPeer = pendingHandshakes.remove(peerNodeId)
+            if (pendingPriv == null) pendingPriv = perPeer
             if (pendingPriv == null) {
                 // The initiator broadcasts SESSION_START with peerNodeId="*" before
                 // it knows the peer's actual node ID. When the peer replies, the
@@ -105,11 +139,14 @@ object PeerSessionManager {
                 // REUSE our original ephemeral private key. Otherwise we'd generate
                 // a fresh keypair here and derive a DIFFERENT shared secret than the
                 // responder, causing HMAC/AEAD mismatches (packets silently dropped).
-                val broadcastPending = pendingHandshakes.remove("*")
+                val inWindow = System.currentTimeMillis() - broadcastStartedAt < BROADCAST_HANDSHAKE_WINDOW_MS
+                val broadcastPending = if (inWindow) pendingHandshakes["*"] else pendingHandshakes.remove("*")
                 if (broadcastPending != null) {
+                    // NOTE: no copy is kept under the peer id. That copy used to survive the
+                    // handshake and, on the NEXT handshake with the same peer, shadowed the fresh
+                    // key: the two phones then derived different secrets and every packet failed
+                    // authentication after a reconnect.
                     pendingPriv = broadcastPending
-                    // Re-key under the actual peer id for future lookups.
-                    pendingHandshakes[peerNodeId] = broadcastPending
                 }
             }
             if (pendingPriv != null) {

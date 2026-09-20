@@ -32,7 +32,7 @@ import com.itantra.orchestrator.PipelineOrchestrator
 import com.itantra.orchestrator.TransceiverState
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
-import com.itantra.transport.BluetoothTransport
+import com.itantra.transport.BleTransport
 import com.itantra.transport.CompositeTransport
 import com.itantra.transport.RouteEntry
 import com.itantra.transport.TransportLayer
@@ -53,7 +53,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var sttEngine: SttEngine
     private lateinit var ttsEngine: TtsEngine
 
-    private var bluetoothTransport: BluetoothTransport? = null
+    private var bluetoothTransport: TransportLayer? = null
     private var wifiDirectTransport: WifiDirectTransport? = null
     private var currentTransport: TransportLayer? = null
 
@@ -94,6 +94,8 @@ class MainActivity : AppCompatActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { perms ->
+        // Radios could not start before the user granted permission; start them now.
+        currentTransport?.ensureRunning()
         val recordGranted = perms[Manifest.permission.RECORD_AUDIO] == true
         if (recordGranted) {
             Toast.makeText(this, "Microphone & Local Radio Permissions Granted", Toast.LENGTH_SHORT).show()
@@ -120,6 +122,7 @@ class MainActivity : AppCompatActivity() {
         renderLatency(null)
 
         checkAndRequestPermissions()
+        registerDebugReceiver()
     }
 
     /** Refresh the language dropdown after returning from the Models screen —
@@ -129,7 +132,63 @@ class MainActivity : AppCompatActivity() {
         try {
             rebuildLanguageDropdown()
         } catch (_: Exception) { }
+        currentTransport?.ensureRunning()
         refreshPeerState()
+    }
+
+    /**
+     * Debug builds only. Simulates a user holding push-to-talk: press (which starts finding and
+     * connecting to nearby phones), "speak" the WAV in filesDir, hold for `hold_ms`, release.
+     *   adb shell am broadcast -a com.itantra.debug.SPEAK_WAV -p com.itantra --es file utt.wav --ei hold_ms 8000
+     * Optional `lang` sets both spoken and target language (e.g. "en").
+     */
+    private fun debugSpeakWav(i: android.content.Intent) {
+        val name = i.getStringExtra("file") ?: return
+        val holdMs = i.getIntExtra("hold_ms", 3000).toLong()
+        i.getStringExtra("lang")?.let {
+            val l = com.itantra.stt.SupportedLanguage.fromCode(it)
+            orchestrator.currentLanguage = l
+            orchestrator.targetLanguage = l
+        }
+        val f = java.io.File(filesDir, name)
+        if (!f.isFile) { android.util.Log.e("DebugSpeak", "missing ${f.absolutePath}"); return }
+        val pcm = f.readBytes().let { b ->
+            val n = (b.size - 44) / 2
+            FloatArray(n) { k -> ((b[44 + 2 * k].toInt() and 0xFF) or (b[45 + 2 * k].toInt() shl 8)).toShort() / 32768f }
+        }
+        android.util.Log.i("DebugSpeak", "PRESS (utterance ${pcm.size / 16000.0}s, hold ${holdMs}ms)")
+        orchestrator.onPttPressed(false)
+        orchestrator.debugInjectSpeech(pcm)
+        binding.root.postDelayed({
+            android.util.Log.i("DebugSpeak", "RELEASE")
+            orchestrator.onPttReleased()
+        }, holdMs)
+    }
+
+    /**
+     * Debug builds only: lets an operator trigger a send over adb without a microphone, e.g.
+     *   adb shell am broadcast -a com.itantra.debug.SEND_TEXT -p com.itantra --es text "hello"
+     * (or --es text_b64 <base64 UTF-8> for non-ASCII). Not registered in release builds.
+     */
+    private fun registerDebugReceiver() {
+        if (applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE == 0) return
+        val receiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
+                if (i?.action == "com.itantra.debug.SPEAK_WAV") { debugSpeakWav(i); return }
+                val text = i?.getStringExtra("text")
+                    ?: i?.getStringExtra("text_b64")?.let {
+                        String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
+                    } ?: return
+                orchestrator.sendDirectTextMessage(text)
+            }
+        }
+        val filter = android.content.IntentFilter("com.itantra.debug.SEND_TEXT")
+        filter.addAction("com.itantra.debug.SPEAK_WAV")
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
+        } else {
+            registerReceiver(receiver, filter)
+        }
     }
 
     private fun initEngines() {
@@ -140,7 +199,8 @@ class MainActivity : AppCompatActivity() {
         sttEngine = SttEngine(this)
         ttsEngine = TtsEngine(this)
 
-        bluetoothTransport = BluetoothTransport(this)
+        // BLE: auto-discovers and connects to nearby iTantra phones (no pairing, no manual connect).
+        bluetoothTransport = BleTransport(this)
         wifiDirectTransport = WifiDirectTransport(this)
         // Composite transport enables multi-peer relay (A↔R1 via BT, R1↔R2 via WiFi)
         currentTransport = CompositeTransport(listOf(bluetoothTransport!!, wifiDirectTransport!!))

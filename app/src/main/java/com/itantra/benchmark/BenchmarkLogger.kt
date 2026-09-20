@@ -86,12 +86,17 @@ object BenchmarkLogger {
         packetBytes: Int = 0,
         jsonPacketBytes: Int = 0
     ): LatencyRecord {
-        val speechDuration = maxOf(0L, tSpeechEnd - tSpeechStart)
-        val sttLatency = maxOf(0L, tSttEnd - tSttStart)
-        val transportLatency = maxOf(0L, tReceive - tSend)
-        val ttsLatency = maxOf(0L, tTtsEnd - tTtsStart)
-        val playbackLatency = maxOf(0L, tPlayStart - tTtsEnd)
-        val totalE2e = maxOf(0L, tPlayStart - tSpeechEnd)
+        // A timestamp of 0 means "not measured on this device" (e.g. the RECEIVING phone never saw
+        // the sender's speech or send time; those clocks are on another device and unsynchronised).
+        // Subtracting it would yield the phone's uptime as a "latency" (observed: 5,980,669,308 ms),
+        // so every segment that needs an unknown start is reported as 0 = NOT MEASURED.
+        fun span(start: Long, end: Long) = if (start > 0L && end > 0L) maxOf(0L, end - start) else 0L
+        val speechDuration = span(tSpeechStart, tSpeechEnd)
+        val sttLatency = span(tSttStart, tSttEnd)
+        val transportLatency = span(tSend, tReceive)
+        val ttsLatency = span(tTtsStart, tTtsEnd)
+        val playbackLatency = span(tTtsEnd, tPlayStart)
+        val totalE2e = span(tSpeechEnd, tPlayStart)
 
         val rtf = if (speechDuration > 0) sttLatency.toFloat() / speechDuration.toFloat() else 0.0f
 

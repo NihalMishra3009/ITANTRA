@@ -41,4 +41,29 @@ interface TransportLayer {
 
     /** Send to a specific peer by node ID. Falls back to sendPacket if unknown. */
     fun sendToPeer(nodeId: String, packet: TextPacket): Boolean = sendPacket(packet)
+
+    /**
+     * Send a SESSION_START (secure handshake) packet. Defaults to a normal broadcast; the BLE
+     * transport narrows it to links that have not identified themselves yet, so opening one new
+     * link does not re-key every phone that is already connected.
+     */
+    fun sendHandshake(packet: TextPacket): Boolean = sendPacket(packet)
+
+    /** Idempotent: start advertising/scanning as soon as radio + permissions allow. */
+    fun ensureRunning() {}
+
+    /**
+     * The user started recording: find and connect to nearby peers NOW so the link (and its
+     * secure handshake) is ready by the time the recording ends.
+     */
+    fun prepareForSend() {}
+
+    /** True when a packet can be sent right now (a link exists AND it is authenticated). */
+    fun isReadyToSend(): Boolean = isConnected()
+
+    /**
+     * Invoked (on the main thread) when a peer link comes up. `initiator` is true when THIS
+     * phone opened the connection, which is the side that starts the secure handshake.
+     */
+    fun setOnPeerLinked(listener: ((initiator: Boolean) -> Unit)?) {}
 }

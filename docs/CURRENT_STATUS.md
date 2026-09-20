@@ -171,3 +171,54 @@ screen off will need a foreground service. That has not been built or tested.
 
 **Still not tested:** two phones (Bluetooth/Wi-Fi Direct), relay, real-speech accuracy, alert volume and
 non-interruptible playback, full-duplex "phone" mode, receiving with the screen off, battery drain.
+
+## L. Two-phone Bluetooth: auto-connect while recording, broadcast on release
+
+**Devices:** OPPO CPH2127 (Android 12, 3.7 GB) and Motorola moto g32 (Android 13), USB-attached, debug builds.
+
+**Design (replaces the Bluetooth-Classic transport in the app):** `BleTransport`. Every phone always advertises an
+iTantra BLE service and runs a GATT server; every phone always scans for it and connects to what it finds. No pairing,
+no discoverable mode, no tap. While the user records, `prepareForSend()` boosts scanning; on link-up the connecting
+phone starts the ECDH handshake; on release the message is broadcast to every authenticated link. The packet format,
+codec and per-hop encryption are unchanged (BLE only carries the same length-prefixed frames).
+
+**Why the old transport could not do this:** Classic RFCOMM forced a pairing dialog and only saw unpaired phones while
+the OTHER phone was set discoverable by hand; connecting also needed a manual dialog. In testing the two phones never
+found each other.
+
+**Measured (warm, both apps running, sender releases the button):**
+
+| Segment | OPPO -> Moto | Moto -> OPPO |
+|---|---|---|
+| release -> packet sent (final Whisper STT) | 2.7-2.8 s | 2.6-3.6 s |
+| packet sent -> delivered (BLE + decrypt) | 94-110 ms | 54-104 ms |
+| delivered -> speech synthesized (eSpeak) | 21-39 ms | 79-292 ms |
+| **release -> audio ready on the other phone** | **2.8-3.0 s** | **3.0-3.8 s** |
+
+Clocks were calibrated against the PC before each run (error about +/-40 ms). Whisper on the sender dominates; the
+radio is about 100 ms. Playback start (AudioTrack) is not included. Two runs per direction.
+
+**Connect-while-recording:** with the receiver's app not running when the sender pressed record, the phones connected
+and secured 1.2-9 s after the press (depending on how long the receiver's app took to launch), always before or right
+at release, and the message was delivered and spoken in both directions.
+
+**Bugs found and fixed while doing this:**
+1. Handshake key handling: the single pending broadcast key was consumed by the first reply, so a 2nd phone derived a
+   different secret. A stale per-peer key also shadowed the fresh one after a reconnect, so every packet failed
+   authentication after the link re-formed. Both fixed, with regression tests.
+2. The responder ignored a new handshake if it already held an old key, so a phone whose link re-formed never got a
+   reply. Now always answered; the handshake is sent only on the NEW link, and replies go to the asker.
+3. Two phones could connect to each other at once (two links, two competing handshakes). The tie-break hint now rides in
+   the primary advertisement, an unknown hint means wait, stale sightings are cleared on Bluetooth restart, and a
+   duplicate link is closed deterministically (both ends close the same one).
+4. Partial (live-caption) transcriptions were queued every 1.5 s and built a backlog the FINAL transcript waited behind
+   (16 s from release to send on the Moto). Now at most one in flight.
+5. `E2E LATENCY` on the receiving phone showed the phone's uptime (5,980,669,308 ms): unknown start times were
+   subtracted from 0. Unknown segments now report as not measured.
+6. `ACCESS_FINE_LOCATION` was capped at API 30 in the manifest, so Wi-Fi Direct discovery failed with error 0 on
+   Android 12+. Cap removed (Wi-Fi Direct itself is still untested).
+
+**Not tested / known gaps:** three or more phones (multi-hop relay); Wi-Fi Direct; SOS over BLE and alert volume
+(the OPPO dropped off USB before the SOS run); receiving with the screen off (the OS freezes background apps; needs a
+foreground service, not built); battery drain of continuous advertising + scanning; the microphone (a debug hook feeds
+a WAV in place of the mic, so real capture/VAD was not exercised in this run). USB kept dropping one phone at a time.

@@ -25,8 +25,12 @@
         android:usesPermissionFlags="neverForLocation" />
 
     <!-- Location required for P2P / BT discovery on Android 11 and below -->
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
+    <!-- NOT capped at API 30: Wi-Fi Direct peer discovery needs ACCESS_FINE_LOCATION on
+         Android 12/12L (API 31-32) — NEARBY_WIFI_DEVICES only exists from API 33 — and the
+         app's own location features need it on every version. With the old cap, discoverPeers()
+         failed with an opaque error 0 on every Android 12 phone. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
     <application
         android:name=".iTantraApp"

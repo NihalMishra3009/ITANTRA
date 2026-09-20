@@ -74,6 +74,9 @@ class PipelineOrchestrator(
 ) {
     companion object {
         private const val TAG = "PipelineOrchestrator"
+
+        /** How long a send waits for a nearby phone to finish connecting + securing. */
+        private const val READY_WAIT_MS = 5_000L
     }
 
     private val myNodeIdValue: String
@@ -307,6 +310,12 @@ class PipelineOrchestrator(
             deliveryTracker = deliveryTracker
         )
 
+        // Auto-connect: when a peer link comes up and WE opened it, start the secure
+        // handshake right away (the responder side replies). No user action involved.
+        effectiveTransport.setOnPeerLinked { initiator ->
+            if (initiator) initiateSessionHandshake()
+        }
+
         // Wire the packet callback. For CompositeTransport, each underlying
         // transport's startListening is already wired. For a single transport,
         // wire it here.
@@ -367,7 +376,7 @@ class PipelineOrchestrator(
             language = currentLanguage.code,
             text = pubB64
         )
-        t.sendPacket(packet)
+        t.sendHandshake(packet)
         Log.i(TAG, "Sent SESSION_START to peer $peerNodeId")
     }
 
@@ -384,11 +393,11 @@ class PipelineOrchestrator(
                     val peerId = packet.senderId
                     val peerPubB64 = packet.text
 
-                    if (PeerSessionManager.hasSessionKey(peerId)) {
-                        // Already have a session key for this peer — skip handshake
-                        Log.d(TAG, "Session already established with $peerId")
-                        return@launch
-                    }
+                    // ALWAYS answer a handshake, even when a key for this peer already exists. A
+                    // link that dropped and re-formed (or a peer that restarted) still has an old
+                    // key on this side; ignoring the new SESSION_START left the peer waiting for a
+                    // reply forever, so it never learned who it was connected to and could not send.
+                    // Each handshake replaces the key on both ends consistently.
 
                     val shared = PeerSessionManager.handleHandshake(peerId, peerPubB64)
                     if (shared != null) {
@@ -404,7 +413,9 @@ class PipelineOrchestrator(
                                 language = currentLanguage.code,
                                 text = ourPubB64
                             )
-                            transport?.sendPacket(reply)
+                            // Answer the phone that asked, not everyone we are connected to.
+                            val t = transport
+                            if (t != null && !t.sendToPeer(peerId, reply)) t.sendPacket(reply)
                         }
                     }
                 } catch (e: Exception) {
@@ -414,6 +425,15 @@ class PipelineOrchestrator(
             return true
         }
         return false
+    }
+
+    /**
+     * Debug/test only: append speech samples to the utterance being recorded, standing in for
+     * the microphone. Used by the debug broadcast to drive the real press -> connect -> STT ->
+     * broadcast flow on a device without a human speaking.
+     */
+    fun debugInjectSpeech(samples: FloatArray) {
+        synchronized(speechAudioBuffer) { for (s in samples) speechAudioBuffer.add(s) }
     }
 
     /**
@@ -429,6 +449,8 @@ class PipelineOrchestrator(
 
         isPttHeld = true
         isAlertNext = isAlert
+        // While the user speaks, find + connect + secure nearby iTantra phones.
+        transport?.prepareForSend()
         speechAudioBuffer.clear()
         vadEngine.reset()
         speechStartTimestamp = BenchmarkLogger.nowMs()
@@ -439,6 +461,12 @@ class PipelineOrchestrator(
         captureJob?.cancel()
         captureJob = coroutineScope.launch {
             var lastPartialMs = 0L
+            // Live captions must never delay the real transcript. STT is single-threaded, so on
+            // a slow phone (2-3 s per decode) a new partial every 1.5 s built a backlog that the
+            // FINAL transcript then waited behind (16 s from release to send on a mid-range device).
+            // At most ONE partial in flight, and the gap adapts to how long a decode really takes.
+            var partialJob: Job? = null
+            var partialCostMs = 0L
             audioRecorder.audioChunkFlow.collect { chunk ->
                 if (!isPttHeld && operatingMode == OperatingMode.PUSH_TO_TALK) return@collect
 
@@ -460,12 +488,17 @@ class PipelineOrchestrator(
                 // growing buffer periodically so the UI shows live text before finalization.
                 val now = System.currentTimeMillis()
                 val bufferLen = synchronized(speechAudioBuffer) { speechAudioBuffer.size }
-                if (isSpeech && bufferLen > 16000 && now - lastPartialMs >= 1500) {
+                val partialGapMs = maxOf(1500L, partialCostMs * 2)
+                if (isSpeech && bufferLen > 16000 && now - lastPartialMs >= partialGapMs &&
+                    partialJob?.isActive != true
+                ) {
                     lastPartialMs = now
                     val partial: FloatArray = synchronized(speechAudioBuffer) { speechAudioBuffer.toFloatArray() }
-                    launch {
+                    partialJob = launch {
+                        val t0 = System.currentTimeMillis()
                         val res = speechModelManager.transcribe(partial)
-                        if (res.text.isNotBlank()) {
+                        partialCostMs = System.currentTimeMillis() - t0
+                        if (res.text.isNotBlank() && isPttHeld) {
                             _lastTranscribedText.value = res.text
                         }
                     }
@@ -571,6 +604,10 @@ class PipelineOrchestrator(
             )
             isAlertNext = false
 
+            // Recording started the connect; give it a moment to finish so the message is
+            // broadcast to every nearby phone instead of being played back locally.
+            if (!isLoopbackOnly) awaitTransportReady(READY_WAIT_MS)
+
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
                 // Loopback / Standalone single phone test or offline outbox store
                 Log.i(TAG, "Dispatching packet via loopback / local pipeline")
@@ -617,6 +654,20 @@ class PipelineOrchestrator(
         }
     }
 
+    /**
+     * Wait (up to [timeoutMs]) until a nearby peer is connected AND authenticated. Recording
+     * already started the connection, so this is usually instant. Returns immediately when
+     * there is nothing to wait for.
+     */
+    private suspend fun awaitTransportReady(timeoutMs: Long) {
+        val t = transport ?: return
+        if (t.isReadyToSend()) return
+        t.prepareForSend()
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!t.isReadyToSend() && System.currentTimeMillis() < deadline) delay(100)
+        Log.i(TAG, "Transport ready=${t.isReadyToSend()} connected=${t.isConnected()}")
+    }
+
     private fun translateStartFrom(transEnd: Long, latency: Long): Long = transEnd - latency
 
     /** Reconstruct a TranslationResult from a successful pipeline outcome for benchmark logging. */
@@ -654,6 +705,7 @@ class PipelineOrchestrator(
             }
             val packet = buildPacket(text = outText, language = lang, isAlert = isAlert, type = type)
 
+            if (!isLoopbackOnly) awaitTransportReady(READY_WAIT_MS)
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {
                 handleIncomingPacket(packet, tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L, tSend = BenchmarkLogger.nowMs())
             } else {
@@ -702,6 +754,7 @@ class PipelineOrchestrator(
             maxHops = 5       // emergency is allowed to travel farther
         )
         _activeSosMessageId.value = packet.messageId
+        transport?.prepareForSend()
 
         coroutineScope.launch {
             val t = transport

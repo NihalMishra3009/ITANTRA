@@ -74,6 +74,24 @@ class CompositeTransport(private val transports: List<TransportLayer>) : Transpo
         }
     }
 
+    override fun ensureRunning() { transports.forEach { it.ensureRunning() } }
+
+    override fun sendHandshake(packet: TextPacket): Boolean {
+        var any = false
+        for (t in transports) if (isEnabled(t) && t.isConnected() && t.sendHandshake(packet)) any = true
+        return any
+    }
+
+    override fun prepareForSend() {
+        for (t in transports) if (isEnabled(t)) t.prepareForSend()
+    }
+
+    override fun isReadyToSend(): Boolean = transports.any { isEnabled(it) && it.isReadyToSend() }
+
+    override fun setOnPeerLinked(listener: ((Boolean) -> Unit)?) {
+        transports.forEach { it.setOnPeerLinked(listener) }
+    }
+
     override fun discoverDevices(onDevicesFound: (List<DeviceInfo>) -> Unit) {
         // Fan out: collect from every enabled non-composite transport concurrently.
         val results = java.util.concurrent.ConcurrentLinkedQueue<DeviceInfo>()

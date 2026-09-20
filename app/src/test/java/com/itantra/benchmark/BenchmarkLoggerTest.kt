@@ -39,4 +39,36 @@ class BenchmarkLoggerTest {
         val r = LatencyRecord("id", "hi", isAlert = false, 0, 0, 0, 0, 0, 0, 0, 0f)
         assertFalse(r.hasAnyMeasurement())
     }
+
+    @Test
+    fun testReceivingPhoneDoesNotInventLatencyFromUnknownStartTimes() {
+        // The receiving phone never saw the sender's speech/send times (0 = unknown). Subtracting
+        // them produced the phone's uptime as an "E2E latency" (5,980,669,308 ms on a real device).
+        val uptimeMs = 5_980_000_000L
+        val r = logger.logInteraction(
+            messageId = "rx", language = "en", isAlert = false,
+            tSpeechStart = 0L, tSpeechEnd = 0L, tSttStart = 0L, tSttEnd = 0L,
+            tSend = 0L, tReceive = uptimeMs - 3_000, tTtsStart = uptimeMs - 2_000,
+            tTtsEnd = uptimeMs - 1_800, tPlayStart = uptimeMs - 1_700
+        )
+        assertEquals("E2E unknown -> not measured", 0L, r.totalE2eLatencyMs)
+        assertEquals("transport unknown -> not measured", 0L, r.transportLatencyMs)
+        assertEquals("STT unknown -> not measured", 0L, r.sttLatencyMs)
+        // Locally measured segments are still reported.
+        assertEquals(200L, r.ttsLatencyMs)
+        assertEquals(100L, r.playbackLatencyMs)
+    }
+
+    @Test
+    fun testFullyLocalMeasurementStillWorks() {
+        val r = logger.logInteraction(
+            messageId = "tx", language = "en", isAlert = false,
+            tSpeechStart = 1_000L, tSpeechEnd = 3_000L, tSttStart = 3_000L, tSttEnd = 5_500L,
+            tSend = 5_600L, tReceive = 5_900L, tTtsStart = 6_000L, tTtsEnd = 6_200L, tPlayStart = 6_300L
+        )
+        assertEquals(2_000L, r.speechDurationMs)
+        assertEquals(2_500L, r.sttLatencyMs)
+        assertEquals(300L, r.transportLatencyMs)
+        assertEquals(3_300L, r.totalE2eLatencyMs)
+    }
 }
