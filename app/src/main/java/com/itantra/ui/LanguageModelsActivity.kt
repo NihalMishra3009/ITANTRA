@@ -335,7 +335,10 @@ class LanguageModelsActivity : AppCompatActivity() {
 
     private fun descriptionText(sttWorking: Boolean, ttsStatus: PackStatus, tts: LanguageModelPack): String = when {
         ttsStatus == PackStatus.INSTALLED || ttsStatus == PackStatus.LOADED -> "Language pack installed — offline STT + TTS"
+        isBundled(tts) && !sttWorking -> "Offline TTS works now (bundled open-source voice). Speech recognition is not available for this language yet."
         isBundled(tts) -> "Offline STT + TTS work now (bundled open-source voice)."
+        ttsStatus == PackStatus.NOT_INSTALLED && tts.downloadUrl != null && !sttWorking ->
+            "Offline TTS works now (bundled open-source voice). Optional: download a higher-quality neural voice."
         ttsStatus == PackStatus.NOT_INSTALLED && tts.downloadUrl != null ->
             "Offline STT + TTS work now (bundled open-source voice). Optional: download a higher-quality neural voice."
         else -> "STT works (bundled). No offline TTS voice available for this language."
@@ -343,8 +346,8 @@ class LanguageModelsActivity : AppCompatActivity() {
 
     private fun roleBadge(label: String, ok: Boolean, mark: String, okColor: Int): TextView =
         TextView(this).apply {
-            text = "$label $mark"
-            setTextColor(getColor(okColor))
+            text = "$label ${if (ok) mark else "—"}"
+            setTextColor(getColor(if (ok) okColor else R.color.text_faint))
             textSize = 12f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         }

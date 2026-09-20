@@ -38,14 +38,34 @@ def write_tokens(cfg: dict, path: Path) -> None:
     # tokens ("aɪ", "eɪ", ...). espeak's output for Indic voices is per-codepoint, so
     # those are never emitted; they are skipped (and reported) rather than crashing load.
     skipped = []
-    with path.open("w", encoding="utf-8") as f:
-        for tok, ids in cfg["phoneme_id_map"].items():
-            if len(tok) != 1:
-                skipped.append(tok)
-                continue
-            f.write(f"{tok} {ids[0]}\n")
+    lines = []
+    for tok, ids in cfg["phoneme_id_map"].items():
+        if len(tok) != 1:
+            skipped.append(tok)
+            continue
+        lines.append(f"{tok} {ids[0]}\n")
+    # Write BYTES: text mode on Windows turns "\n" into "\r\n". sherpa-onnx on Windows
+    # tolerates stray CRs, but on Android it ABORTS the process ("Duplicated token"), so a
+    # pack that passes a Windows check can still crash a phone.
+    path.write_bytes("".join(lines).encode("utf-8"))
     if skipped:
         print(f"note: skipped multi-codepoint tokens: {skipped}")
+
+
+def validate_tokens(path: Path) -> None:
+    raw = path.read_bytes()
+    if b"\r" in raw:
+        raise SystemExit("FAIL: tokens.txt contains CR characters (Android sherpa-onnx would abort)")
+    seen = {}
+    for n, line in enumerate(raw.decode("utf-8").split("\n"), 1):
+        if not line:
+            continue
+        tok, _, tid = line.rpartition(" ")
+        if not tid.isdigit():
+            raise SystemExit(f"FAIL: tokens.txt line {n} has no numeric id: {line!r}")
+        if tok in seen:
+            raise SystemExit(f"FAIL: duplicated token {tok!r} (lines {seen[tok]} and {n})")
+        seen[tok] = n
 
 
 def inject_meta(model_path: Path, cfg: dict, language: str) -> None:
@@ -135,6 +155,7 @@ def main() -> int:
         quantize_dynamic(str(fp32), str(int8), weight_type=QuantType.QUInt8)
         inject_meta(int8, cfg, a.language)
         write_tokens(cfg, pack / "tokens.txt")
+        validate_tokens(pack / "tokens.txt")
         shutil.copy(a.json, pack / f"{voice}.onnx.json")
         shutil.copy(a.model_card, pack / "MODEL_CARD")
         shutil.copytree(a.espeak_data, pack / "espeak-ng-data")

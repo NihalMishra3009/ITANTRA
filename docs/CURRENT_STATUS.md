@@ -133,3 +133,41 @@ paths, and no device was available in this cycle; the APK size is dominated by t
   not in the tree. It only built from a cached configure; a fresh clone could not build.
 - Corrected earlier false claims: Piper Hindi is CC-BY-NC-SA (not MIT); the bundled Bengali model's license was
   self-contradictory.
+
+## K. On-device end-to-end results (single phone)
+
+**Device:** OPPO CPH2127, Android 12, arm64-v8a, 3.7 GB RAM (mid/low range). Debug build, USB. Instrumented
+tests in `app/src/androidTest/.../DeviceE2ETest.kt`; measurements are on logcat tag `E2E`.
+
+| Check | Result |
+|---|---|
+| App launch, main + Models screens, SOS dialog and send | Works, no crash. SOS with no peer shows "SOS SENDING", QUEUE: 1 (store-and-forward) |
+| eSpeak NG, all 10 languages, on device | 3.1-4.2 s of audio per sentence, RTF 0.010-0.013 (about 90x real time) |
+| `TtsEngine` end to end, all 10 languages | Pass, non-silent audio for every language |
+| Neural Piper Telugu: download from the GitHub release, install, load | Works. Speech produced; RTF about 1.3 on the first call (slower than real time). Install takes about 3 min (bzip2 extraction on this CPU) |
+| Whisper base int8 STT speed | RTF 0.9-1.3 for most languages, i.e. transcription is about as slow as the audio is long |
+| TTS -> STT round trip, English | WER 0.14 (1 of 7 words) |
+| Idle (main screen, 60 s) | 113 MB RSS, 115 MB PSS, about 1.1% of one core, 31 threads |
+
+**Not a valid accuracy result:** the round trip feeds robotic eSpeak audio to Whisper. Indic-language output was
+mostly garbage, which says little about real speech. **No real-speech WER has been measured for any language.**
+
+**Bugs found on the device and fixed:**
+1. Whisper decoded every language as the FIRST one used (the language was baked in at build time). Now switched
+   in place with `setConfig`.
+2. Odia crashed the whole app: Whisper has no Odia, and sherpa-onnx calls `exit()` on an invalid language.
+   Odia STT is now reported unavailable and never reaches the recognizer.
+3. Every voice pack I built had CRLF line endings in `tokens.txt`, which ABORTS sherpa-onnx on Android. It passed
+   on Windows, so host verification missed it. Packs rebuilt and re-uploaded; the build script now validates
+   the file; the app also strips CRs before loading. Regression tests added.
+4. Downloaded voices installed but were never used: the loader required a file named `model.onnx`, while packs keep
+   their own name. Fixed and covered by a test.
+5. The Models screen showed "STT ✓" for every language regardless of support.
+
+**Environment finding:** on this ROM (ColorOS), a process without a foreground activity is frozen by the OS,
+even mid-computation. My first timings (65-638 s for a few seconds of audio) were wall-clock time spent frozen and
+were wrong; the decoder is not runaway. For a walkie-talkie this matters: receiving while backgrounded or with the
+screen off will need a foreground service. That has not been built or tested.
+
+**Still not tested:** two phones (Bluetooth/Wi-Fi Direct), relay, real-speech accuracy, alert volume and
+non-interruptible playback, full-duplex "phone" mode, receiving with the screen off, battery drain.

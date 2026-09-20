@@ -356,6 +356,14 @@ class MainActivity : AppCompatActivity() {
                     // a missing model only after speaking. Same-language always allowed.
                     val src = orchestrator.sourceLanguage
                     val tgt = orchestrator.targetLanguage
+                    if (!orchestrator.speechModelManager.sttAvailable(src.code)) {
+                        Toast.makeText(
+                            this,
+                            "Speech recognition is not available for ${src.displayName} yet.",
+                            Toast.LENGTH_LONG
+                        ).show()
+                        return@setOnTouchListener true
+                    }
                     if (src != tgt) {
                         val ready = orchestrator.speechModelManager.pipelineReady(src, tgt)
                         if (!ready) {

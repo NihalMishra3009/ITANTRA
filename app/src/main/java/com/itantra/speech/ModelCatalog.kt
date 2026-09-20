@@ -207,20 +207,20 @@ object ModelCatalog {
             "Public domain (LJ Speech)"
         ),
         "mr" to RealVoice(
-            "Piper mr_IN-google (INT8)", 22_080_024,
-            "90e2df7b4c5354fbc39cf896856ec38acb2f796e527d86881ad7b90f5a087711",
+            "Piper mr_IN-google (INT8)", 22_079_724,
+            "40a4821dfe2f1bf785213ef8793dba15f469272b36747e5ddc8559874678eac5",
             "$OPEN_TTS_RELEASE_BASE/vits-piper-mr_IN-google-medium-int8.tar.bz2",
             "CC-BY-SA 4.0 (OpenSLR 64)"
         ),
         "te" to RealVoice(
-            "Piper te_IN-venkatesh (INT8)", 20_960_921,
-            "97e37d8b0b10c492556a99f4302d1560a0325b3379e36af76a58eafd17df0e82",
+            "Piper te_IN-venkatesh (INT8)", 20_960_788,
+            "c4aa888843e73bcefc068b0bc6f2b0efd084ff5079b41273deb5ec28d36f006d",
             "$OPEN_TTS_RELEASE_BASE/vits-piper-te_IN-venkatesh-medium-int8.tar.bz2",
             "CC-BY 4.0 (AI4Bharat IndicVoices-R)"
         ),
         "bn" to RealVoice(
-            "Piper bn_BD-google (INT8)", 22_000_114,
-            "516f8845dc4965f67eff24ab04978347835a51dd28f5d84a27e2c14be4b1d144",
+            "Piper bn_BD-google (INT8)", 21_999_797,
+            "7f51e1752569a1f86c82c7e29082d5be922058dea76f4e5caaa528cdca000d3d",
             "$OPEN_TTS_RELEASE_BASE/vits-piper-bn_BD-google-medium-int8.tar.bz2",
             "CC-BY-SA 4.0 (OpenSLR 37) + CMU Indic license"
         ),

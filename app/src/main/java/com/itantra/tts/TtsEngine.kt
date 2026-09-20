@@ -34,6 +34,35 @@ class TtsEngine(
     companion object {
         private const val TAG = "TtsEngine"
         private const val SAMPLE_RATE = 24000
+
+        /**
+         * The model file of an installed voice pack. Archives keep their own file name
+         * (e.g. "te_IN-venkatesh-medium.onnx"), so requiring a literal "model.onnx" made
+         * every downloaded Piper voice install fine and then never load. Prefer
+         * "model.onnx" when present, else the single .onnx file in the pack.
+         */
+        /**
+         * Strip carriage returns from a tokens.txt. sherpa-onnx's Android build ABORTS THE
+         * PROCESS on a CRLF/CRCRLF tokens file ("Duplicated token"), which cannot be caught.
+         * Voice packs built on Windows can carry them, so normalize before every load.
+         * Returns true when the file had to be rewritten.
+         */
+        private const val CR: Byte = 13 // carriage return
+
+        fun normalizeTokensFile(file: File): Boolean {
+            if (!file.isFile) return false
+            val raw = file.readBytes()
+            if (raw.none { it == CR }) return false
+            file.writeBytes(raw.filter { it != CR }.toByteArray())
+            return true
+        }
+
+        fun findVoiceModel(dir: File): File? {
+            val canonical = File(dir, "model.onnx")
+            if (canonical.isFile) return canonical
+            return dir.listFiles { f -> f.isFile && f.name.endsWith(".onnx", ignoreCase = true) }
+                ?.sortedBy { it.name }?.firstOrNull()
+        }
     }
 
     private var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
@@ -44,6 +73,16 @@ class TtsEngine(
     /** Open-source rule-based voice used when no neural voice is loaded for a language. */
     private val espeak = EspeakSynth(context)
     private var usingEspeak = false
+    private var loadedFromDownload = false
+
+    /** Which voice is active: "espeak", "neural-downloaded", "neural-bundled" or "none". */
+    @Synchronized
+    fun activeBackend(): String = when {
+        !hasRealModel -> "none"
+        usingEspeak -> "espeak"
+        loadedFromDownload -> "neural-downloaded"
+        else -> "neural-bundled"
+    }
 
     @Synchronized
     override fun initialize(languageCode: String): Boolean {
@@ -107,7 +146,7 @@ class TtsEngine(
     /** Load a downloaded voice pack if present; false if none exists. */
     private fun loadDownloadedVoiceIfPresent(lang: SupportedLanguage): Boolean {
         val dir = File(context.filesDir, "models/tts/${lang.code}")
-        if (!File(dir, "model.onnx").exists() || !File(dir, "tokens.txt").exists()) return false
+        if (findVoiceModel(dir) == null || !File(dir, "tokens.txt").exists()) return false
         return loadDownloadedVoice(lang.code)
     }
 
@@ -122,11 +161,14 @@ class TtsEngine(
     fun loadDownloadedVoice(langCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(langCode)
         val dir = File(context.filesDir, "models/tts/${lang.code}")
-        val modelFile = File(dir, "model.onnx")
+        val modelFile = findVoiceModel(dir) ?: File(dir, "model.onnx")
         val tokensFile = File(dir, "tokens.txt")
         if (!modelFile.exists() || !tokensFile.exists()) {
             Log.w(TAG, "No downloaded voice for ${lang.displayName}")
             return false
+        }
+        if (normalizeTokensFile(tokensFile)) {
+            Log.w(TAG, "Removed carriage returns from ${lang.code} tokens.txt (would abort sherpa-onnx)")
         }
         // Piper voices need the espeak-ng-data directory via dataDir.
         val espeakDir = File(dir, "espeak-ng-data")
@@ -169,6 +211,7 @@ class TtsEngine(
             )
             tts = OfflineTts(assetManager = null, config = config)
             hasRealModel = true
+            loadedFromDownload = true
             isInitialized = true  // prevent synthesize() from re-initializing to bundled asset
             modelManager.markLoaded(ModelType.TTS, lang.code, modelFile.length())
             Log.i(TAG, "Downloaded voice loaded for ${lang.displayName} " +
@@ -309,6 +352,7 @@ class TtsEngine(
             tts = null
             hasRealModel = false
             usingEspeak = false
+            loadedFromDownload = false
             isInitialized = false
         }
     }

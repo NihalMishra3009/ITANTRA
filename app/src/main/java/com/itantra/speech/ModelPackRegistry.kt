@@ -76,7 +76,10 @@ class ModelPackRegistry(
     private val packs: List<ModelPack> = buildList {
         // ---- STT: existing Whisper multilingual (all 10 langs) ----
         for (lang in SupportedLanguage.values()) {
-            val available = assetExists("models/stt/whisper-base-encoder.int8.onnx") &&
+            // Whisper has no Odia token; reporting it as available would let the app
+            // route Odia audio to a model that cannot decode it.
+            val available = com.itantra.stt.SttEngine.whisperSupports(lang.code) &&
+                    assetExists("models/stt/whisper-base-encoder.int8.onnx") &&
                     assetExists("models/stt/whisper-base-decoder.int8.onnx")
             add(
                 ModelPack(

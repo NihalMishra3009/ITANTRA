@@ -49,10 +49,28 @@ class SttEngine(
         private const val DECODER_ASSET = "models/stt/whisper-base-decoder.int8.onnx"
         private const val TOKENS_ASSET = "models/stt/whisper-base-tokens.txt"
         private const val MIN_MODEL_SIZE_BYTES = 1024 * 1024
+
+        /**
+         * Languages Whisper has NO token for. Handing one to sherpa-onnx does not throw:
+         * it logs "Invalid language" and calls exit(), killing the whole app process
+         * (observed on-device with Odia). They must never reach the recognizer.
+         */
+        val WHISPER_UNSUPPORTED = setOf("or")
+
+        fun whisperSupports(languageCode: String): Boolean =
+            languageCode.lowercase() !in WHISPER_UNSUPPORTED
+
+        /** A language code that is always safe to give the recognizer. */
+        fun safeWhisperLanguage(languageCode: String): String =
+            if (whisperSupports(languageCode)) languageCode.lowercase() else "hi"
     }
 
     private var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
     private var recognizer: OfflineRecognizer? = null
+    /** Config the live recognizer was built with; re-used to switch language in place. */
+    private var activeConfig: OfflineRecognizerConfig? = null
+    /** Language code currently applied inside the recognizer (Whisper decodes in ONE language). */
+    private var appliedLanguage: String? = null
     private var isInitialized = false
     private var hasRealModel = false
 
@@ -63,6 +81,7 @@ class SttEngine(
         // model just because language changed. Reload only on first init.
         if (isInitialized && recognizer != null) {
             currentLanguage = lang
+            applyLanguage(lang)
             return true
         }
         currentLanguage = lang
@@ -79,9 +98,14 @@ class SttEngine(
         val startTime = System.currentTimeMillis()
         val targetLang = if (languageCode.isNotBlank()) SupportedLanguage.fromCode(languageCode) else currentLanguage
 
+        if (!whisperSupports(targetLang.code)) {
+            Log.w(TAG, "Whisper has no ${targetLang.displayName} support — returning empty transcript")
+            return SttResult("", targetLang.code, 0)
+        }
         if (!isInitialized || recognizer == null || currentLanguage != targetLang) {
             initialize(targetLang.code)
         }
+        applyLanguage(targetLang)
         val rec = recognizer ?: return SttResult("", targetLang.code, 0)
 
         if (audioChunk.isEmpty()) {
@@ -147,6 +171,32 @@ class SttEngine(
         }
     }
 
+    /**
+     * Whisper is told which language to decode when the recognizer is built. Without
+     * re-applying it, every language after the first was decoded as the FIRST one
+     * (e.g. Tamil audio came out in Hindi/Urdu script). setConfig swaps the language
+     * in place without reloading the 160 MB model.
+     */
+    private fun applyLanguage(lang: SupportedLanguage) {
+        val rec = recognizer ?: return
+        val cfg = activeConfig ?: return
+        if (!whisperSupports(lang.code)) return // keep the last valid language; see WHISPER_UNSUPPORTED
+        if (appliedLanguage == lang.code) return
+        try {
+            val updated = cfg.copy(
+                modelConfig = cfg.modelConfig.copy(
+                    whisper = cfg.modelConfig.whisper.copy(language = lang.code)
+                )
+            )
+            rec.setConfig(updated)
+            activeConfig = updated
+            appliedLanguage = lang.code
+            Log.i(TAG, "Whisper language switched to ${lang.code}")
+        } catch (e: Throwable) {
+            Log.e(TAG, "Whisper language switch failed for ${lang.code}", e)
+        }
+    }
+
     /** Downloaded shared STT engine files (encoder, decoder, tokens) or null. */
     private fun downloadedWhisperFiles(): Triple<File, File, File>? {
         val engineDir = File(context.filesDir, "models/stt_engine/stt_engine_whisper_small")
@@ -174,7 +224,7 @@ class SttEngine(
             val whisperConfig = OfflineWhisperModelConfig(
                 encoder = encoderPath,
                 decoder = decoderPath,
-                language = lang.code,
+                language = safeWhisperLanguage(lang.code),
                 task = "transcribe",
                 tailPaddings = -1,
                 enableTokenTimestamps = false,
@@ -225,6 +275,8 @@ class SttEngine(
             )
 
             recognizer = OfflineRecognizer(assetManager = null, config = config)
+            activeConfig = config
+            appliedLanguage = safeWhisperLanguage(lang.code)
             hasRealModel = true
             // parentFile is null for a bare filename; this is a log-label only and must
             // never be able to throw, or the catch below would discard a recognizer that
@@ -250,6 +302,8 @@ class SttEngine(
             // ignore
         } finally {
             recognizer = null
+            activeConfig = null
+            appliedLanguage = null
             hasRealModel = false
             isInitialized = false
         }
