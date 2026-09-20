@@ -42,13 +42,56 @@ object ModelCatalog {
      */
     const val OPEN_SOURCE_ONLY = true
 
-    /** Languages whose only known offline TTS voice is non-commercial. */
-    private fun onlyNonCommercialTts(code: String): Boolean =
-        realVoices[code]?.restrictedLicense == true || code in mmsSha
+    /** Bundled eSpeak NG data (zip) — the open-source TTS floor for every language. */
+    const val ESPEAK_DATA_ASSET = "models/tts/espeak-ng-data.zip"
 
-    /** Every pack the catalog would OFFER (download URL present) with a non-commercial license. */
-    fun offeredNonCommercialPacks(): List<LanguageModelPack> =
-        packs().filter { it.downloadUrl != null && it.license.contains("-NC", ignoreCase = true) }
+    /** Release hosting the converted open Piper voice packs (built by
+     *  model-conversion/build_piper_sherpa_pack.py). */
+    private const val OPEN_TTS_RELEASE_BASE =
+        "https://github.com/NihalMishra3009/ITANTRA/releases/download/tts-open-v1"
+
+    /** True when a NEURAL voice with a verified open license exists for this language. */
+    private fun hasOpenNeuralVoice(code: String): Boolean =
+        realVoices[code]?.let { !it.restrictedLicense } == true
+
+    /**
+     * Licenses accepted by the open-source-only policy. Anything else — CC-BY-NC,
+     * "see URL", custom research licenses — must not be offered.
+     */
+    fun isOpenLicense(license: String): Boolean {
+        val l = license.lowercase()
+        if (l.contains("-nc") || l.contains("noncommercial") || l.contains("non-commercial")) return false
+        return listOf("public domain", "mit", "apache", "cc-by 4", "cc-by-4", "cc-by-sa", "gpl")
+            .any { l.contains(it) }
+    }
+
+    /** Bundled, open-source, rule-based voice: guarantees every language has TTS offline. */
+    private fun espeakPack(lang: SupportedLanguage): LanguageModelPack {
+        val bundled = convertedArtifactExists(ESPEAK_DATA_ASSET)
+        return LanguageModelPack(
+            id = "tts_${lang.code}",
+            language = lang,
+            role = ModelRole.TTS,
+            modelName = "eSpeak NG (bundled)",
+            version = "1.52.0.1",
+            sizeBytes = if (bundled) convertedSize(ESPEAK_DATA_ASSET) else 0L,
+            checksumSha256 = "",
+            license = "GPL-3.0-or-later (eSpeak NG)",
+            runtime = Mlruntime.ESPEAK_NG,
+            quantization = Quantization.NONE,
+            sampleRate = 22050,
+            supportedDeviceClass = DeviceClass.LOW,
+            downloadUrl = null, // ships inside the APK — nothing to download
+            isMultilingualShared = true,
+            supportsLanguage = true,
+            notes = "Bundled open-source rule-based voice — works offline for ${lang.displayName}. " +
+                "Robotic but intelligible; a neural voice is used instead when one is installed."
+        )
+    }
+
+    /** Every pack the catalog would OFFER (download URL present) whose license is not verified open. */
+    fun offeredNonOpenPacks(): List<LanguageModelPack> =
+        packs().filter { it.downloadUrl != null && it.role == ModelRole.TTS && !isOpenLicense(it.license) }
 
     /** Whether a language is genuinely covered by the IndicConformer multilingual STT pack. */
     private val indicConformerLangs = setOf(
@@ -98,26 +141,8 @@ object ModelCatalog {
     private fun ttsPack(lang: SupportedLanguage): LanguageModelPack {
         val supported = lang.code in indicF5Langs
         // Real, verified, loadable Piper/Coqui/Mimic3 TTS voices.
-        if (OPEN_SOURCE_ONLY && onlyNonCommercialTts(lang.code)) {
-            return LanguageModelPack(
-                id = "tts_${lang.code}",
-                language = lang,
-                role = ModelRole.TTS,
-                modelName = "none (open-source-only policy)",
-                version = "",
-                sizeBytes = 0L,
-                checksumSha256 = "",
-                license = "n/a",
-                runtime = Mlruntime.SHERPA_VITS,
-                quantization = Quantization.INT8,
-                sampleRate = 22050,
-                supportedDeviceClass = DeviceClass.MID,
-                downloadUrl = null,
-                isMultilingualShared = false,
-                supportsLanguage = false,
-                notes = "NOT AVAILABLE: the only known offline ${lang.displayName} TTS voice is " +
-                    "non-commercial (CC-BY-NC) and is excluded by the open-source-only policy."
-            )
+        if (OPEN_SOURCE_ONLY && !hasOpenNeuralVoice(lang.code)) {
+            return espeakPack(lang)
         }
         val realVoice = realVoices[lang.code]
         if (realVoice != null) {
@@ -145,7 +170,7 @@ object ModelCatalog {
         }
         // Meta MMS-TTS converted voice (hosted tar.bz2) — covers the 5 Indic languages
         // with no Piper/Coqui sherpa voice. Loadable by sherpa-onnx VITS front-end.
-        val mms = if (lang.code in mmsSha) mmsPack(lang.code) else null
+        val mms = if (!OPEN_SOURCE_ONLY && lang.code in mmsSha) mmsPack(lang.code) else null
         if (mms != null && mms.downloadUrl != null) {
             return mms.copy(id = "tts_${lang.code}")
         }
@@ -174,17 +199,45 @@ object ModelCatalog {
 
     /** Real, verified, loadable sherpa-onnx TTS voices with TRUE SHA-256. */
     private val realVoices: Map<String, RealVoice> = mapOf(
+        // ---- Verified OPEN neural voices (license read from each voice's MODEL_CARD) ----
+        "en" to RealVoice(
+            "Piper en_US-ljspeech (high, INT8)", 33_886_472,
+            "916b2526d4ea191f9710bd2753698ac97926ec38eade867408d3f5fd422ca285",
+            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-ljspeech-high-int8.tar.bz2",
+            "Public domain (LJ Speech)"
+        ),
+        "mr" to RealVoice(
+            "Piper mr_IN-google (INT8)", 22_080_024,
+            "90e2df7b4c5354fbc39cf896856ec38acb2f796e527d86881ad7b90f5a087711",
+            "$OPEN_TTS_RELEASE_BASE/vits-piper-mr_IN-google-medium-int8.tar.bz2",
+            "CC-BY-SA 4.0 (OpenSLR 64)"
+        ),
+        "te" to RealVoice(
+            "Piper te_IN-venkatesh (INT8)", 20_960_921,
+            "97e37d8b0b10c492556a99f4302d1560a0325b3379e36af76a58eafd17df0e82",
+            "$OPEN_TTS_RELEASE_BASE/vits-piper-te_IN-venkatesh-medium-int8.tar.bz2",
+            "CC-BY 4.0 (AI4Bharat IndicVoices-R)"
+        ),
+        "bn" to RealVoice(
+            "Piper bn_BD-google (INT8)", 22_000_114,
+            "516f8845dc4965f67eff24ab04978347835a51dd28f5d84a27e2c14be4b1d144",
+            "$OPEN_TTS_RELEASE_BASE/vits-piper-bn_BD-google-medium-int8.tar.bz2",
+            "CC-BY-SA 4.0 (OpenSLR 37) + CMU Indic license"
+        ),
+        // ---- EXCLUDED by OPEN_SOURCE_ONLY (kept only so the reason is on record) ----
         "hi" to RealVoice(
             "Piper hi_IN-pratham (INT8)", 20987965,
             "20f568c56207c13b9a0d9478aec8b7d1449122e618aeebc7211f6abc942b58b7",
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-hi_IN-pratham-medium-int8.tar.bz2",
-            "MIT"
+            "CC-BY-NC-SA 4.0 (dataset)",
+            restrictedLicense = true
         ),
         "ml" to RealVoice(
             "Piper ml_IN-meera (INT8)", 20183613,
             "e4e87086c39c477a538cf42e8a3337f6d6ebce8ef2b2e6dfa61bc28b129d341c",
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-ml_IN-meera-medium-int8.tar.bz2",
-            "MIT"
+            "Unverified (IndicTTS Malayalam corpus: \"see URL\")",
+            restrictedLicense = true
         ),
         "gu" to RealVoice(
             "Mimic3 gu_IN-cmu-indic (low)", 76330321,
@@ -192,18 +245,6 @@ object ModelCatalog {
             "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-mimic3-gu_IN-cmu-indic_low.tar.bz2",
             "CC-BY-NC 4.0",
             restrictedLicense = true
-        ),
-        "bn" to RealVoice(
-            "Coqui bn-custom-female", 103_000_000,
-            "a03292d7da03650e892bb1989b40dc2c62574c0d6c34c8bef185fbb3151417a1",
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-coqui-bn-custom_female.tar.bz2",
-            "CC-BY 4.0"
-        ),
-        "en" to RealVoice(
-            "Piper en_US-lessac (INT8)", 20050000,
-            "f1c6d0295cf16087b05f80fdca5b44daca5cd78e2c425d419a42ba34929805f9",
-            "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-en_US-lessac-medium-int8.tar.bz2",
-            "MIT"
         )
     )
 
@@ -213,7 +254,7 @@ object ModelCatalog {
         val sha256: String,
         val url: String,
         val license: String,
-        /** true when the license has a non-commercial clause (NOT open-source-approved). */
+        /** true when the license is non-commercial OR could not be verified as open (NOT approved). */
         val restrictedLicense: Boolean = false
     )
 

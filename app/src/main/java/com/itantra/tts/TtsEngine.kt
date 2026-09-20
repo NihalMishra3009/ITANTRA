@@ -41,6 +41,10 @@ class TtsEngine(
     private var isInitialized = false
     private var hasRealModel = false
 
+    /** Open-source rule-based voice used when no neural voice is loaded for a language. */
+    private val espeak = EspeakSynth(context)
+    private var usingEspeak = false
+
     @Synchronized
     override fun initialize(languageCode: String): Boolean {
         val lang = SupportedLanguage.fromCode(languageCode)
@@ -71,7 +75,8 @@ class TtsEngine(
             val mmsPath = "$mmsAssetDir/model.onnx"
             val mmsTokens = "$mmsAssetDir/tokens.txt"
             if (!assetExists(mmsPath) || !assetExists(mmsTokens)) {
-                Log.w(TAG, "No genuine TTS model for ${lang.displayName} (missing $modelPath / $mmsPath) — TTS unavailable")
+                Log.i(TAG, "No neural TTS voice for ${lang.displayName} — using eSpeak NG")
+                initEspeak(lang)
                 isInitialized = true
                 return true
             }
@@ -88,6 +93,15 @@ class TtsEngine(
             useFilePaths = false,
             lang = lang
         )
+    }
+
+    /** Select the eSpeak NG voice for [lang]. Leaves hasRealModel=false when unavailable. */
+    private fun initEspeak(lang: SupportedLanguage): Boolean {
+        val ok = espeak.isAvailable(lang.code)
+        usingEspeak = ok
+        hasRealModel = ok
+        if (ok) modelManager.markLoaded(ModelType.TTS, lang.code, 0L)
+        return ok
     }
 
     /** Load a downloaded voice pack if present; false if none exists. */
@@ -215,10 +229,10 @@ class TtsEngine(
                     (if (useFilePaths) " [downloaded pack]" else " [bundled asset]"))
             true
         } catch (e: Exception) {
-            Log.e(TAG, "No genuine TTS model for ${lang.displayName} — TTS unavailable", e)
+            Log.e(TAG, "Neural TTS load failed for ${lang.displayName} — falling back to eSpeak NG", e)
             hasRealModel = false
             tts = null
-            false
+            initEspeak(lang)
         } finally {
             isInitialized = true
         }
@@ -243,6 +257,16 @@ class TtsEngine(
         val cleanText = text.trim()
         if (cleanText.isEmpty()) {
             return TtsResult(ShortArray(0), SAMPLE_RATE, 0, targetLang.code)
+        }
+        if (usingEspeak) {
+            val res = espeak.synthesize(cleanText, targetLang.code, isAlert)
+            val ms = System.currentTimeMillis() - startTime
+            if (res == null) {
+                Log.w(TAG, "eSpeak synthesis failed for ${targetLang.code}")
+                return TtsResult(ShortArray(0), SAMPLE_RATE, ms, targetLang.code)
+            }
+            Log.i(TAG, "TTS[eSpeak] [${targetLang.code}] ${ms}ms (${res.first.size} samples @ ${res.second}Hz)")
+            return TtsResult(res.first, res.second, ms, targetLang.code)
         }
         val engine = tts
         if (!hasRealModel || engine == null) {
@@ -284,6 +308,7 @@ class TtsEngine(
         } finally {
             tts = null
             hasRealModel = false
+            usingEspeak = false
             isInitialized = false
         }
     }

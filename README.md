@@ -4,7 +4,7 @@
 [![Android Build](https://img.shields.io/badge/Android-Gradle%20Build%20PASS-brightgreen.svg)]()
 [![Inference](https://img.shields.io/badge/On--Device-100%25%20Offline-blue.svg)]()
 [![STT](https://img.shields.io/badge/STT-Whisper%20base%20int8-purple.svg)]()
-[![TTS](https://img.shields.io/badge/TTS-VITS%20Piper%2FCoqui%2FMMS-purple.svg)]()
+[![TTS](https://img.shields.io/badge/TTS-Piper%20%2B%20eSpeak%20NG%20(open%20source)-purple.svg)]()
 [![VAD](https://img.shields.io/badge/VAD-Energy%20Adaptive%20Fallback-grey.svg)]()
 [![Security](https://img.shields.io/badge/Security-Hop--Level%20AEAD%20ECDH-red.svg)]()
 [![Protocol](https://img.shields.io/badge/Protocol-v4%20Binary%20Wire-teal.svg)]()
@@ -135,10 +135,15 @@ Audio is never transmitted. Only the compact UTF-8 text packet travels over the 
 - **100% Offline Operation**: zero cloud STT/TTS APIs, zero telemetry, zero internet dependency.
 - **10 Indian Languages — STT**: ONE multilingual **Whisper base int8** model recognizes all 10 languages (verified in `ModelCapabilityRegistry`).
 - **Downloadable TTS Voice Packs (offline after install)**:
-  - Verified downloadable voices exist for **all 10 languages**:
-    - **Open-source (MIT/CC-BY):** Hindi, English, Malayalam (Piper VITS), Bengali (Coqui TTS)
-    - **Restricted non-commercial (CC-BY-NC):** Gujarati (Mimic3), Marathi/Kannada/Tamil/Telugu/Odia (Meta MMS-TTS converted to sherpa-onnx VITS, hosted on the iTantra release, SHA-256 verified). License restrictions are displayed honestly in the Models UI.
-  - Bengali VITS (`vits_bn`) is still bundled in the APK as a zero-download fallback.
+  - **Open-source models only** (`ModelCatalog.OPEN_SOURCE_ONLY`, enforced by a unit test). Every language has an
+    open-licensed offline voice:
+    - **Bundled floor, all 10 languages: eSpeak NG** (GPL-3.0-or-later, rule-based, ~0.75 MB of data). Robotic but
+      intelligible; works immediately with no download. It is the only voice for Hindi, Malayalam, Gujarati,
+      Kannada, Tamil and Odia.
+    - **Optional neural upgrade (downloadable Piper VITS):** English (LJ Speech, public domain), Marathi
+      (CC-BY-SA 4.0), Telugu (CC-BY 4.0), Bengali (CC-BY-SA 4.0). A neural voice outranks eSpeak once installed.
+    - **Excluded as non-open:** Meta MMS-TTS and Mimic3 Gujarati (CC-BY-NC), Piper Hindi (CC-BY-NC-SA dataset),
+      Piper Malayalam and the Coqui Bengali model (license could not be verified). See `docs/MODEL_LICENSES.md`.
   - **IndicConformer / IndicF5 are NOT runtime dependencies** of this prototype (their published checkpoints are not directly loadable through the current Android pipeline).
 - **Real Model Inference (ONNX Runtime)**:
   - **VAD**: Energy-based adaptive VAD with noise-floor tracking, minimum speech duration, hangover, and clipping detection. Clearly reported as "Energy fallback" — not neural VAD.
@@ -291,4 +296,9 @@ Values are best read live on a target device via logcat or the Diagnostics UI ra
 - **sherpa-onnx** (inference runtime): [Apache 2.0](https://github.com/k2-fsa/sherpa-onnx).
 - **Silero VAD**: [MIT License](https://github.com/snakers4/silero-vad).
 - **VITS TTS**: [MIT License](https://github.com/jaywalnut310/vits).
+- **eSpeak NG** (TTS, linked into the app): [GPL-3.0-or-later](https://github.com/espeak-ng/espeak-ng). Because it is
+  statically linked into `libitantra_espeak.so`, the **distributed APK as a whole must be offered under GPL-3.0-or-later
+  terms** (with source). The iTantra source code itself is MIT, which is GPL-compatible. If you need a non-GPL binary,
+  set `OPEN_SOURCE_ONLY` aside and replace eSpeak with a permissively licensed voice for those six languages.
+- **Piper voices** (optional downloads): licenses are per voice, recorded in `docs/MODEL_LICENSES.md`.
 - **iTantra Source Code**: **MIT License**.

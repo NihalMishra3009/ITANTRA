@@ -8,7 +8,7 @@ PHYSICALLY VERIFIED / NOT VERIFIED / BLOCKED.
 ## A. What is actually implemented (code present, builds)
 
 - STT: Whisper base INT8 (bundled, sherpa-onnx), Hindi + English priority, all-10 multilingual capability declared.
-- TTS: Piper/VITS packs, Hindi + English hosted; Bengali VITS bundled.
+- TTS: **open-source only.** Bundled eSpeak NG (GPL-3.0+) covers all 10 languages; optional Piper neural voices (en/mr/te/bn, open-licensed). Non-open voices excluded — see `docs/MODEL_LICENSES.md`.
 - VAD: **Adaptive Energy VAD** as active detector; Silero v4 model bundled but NOT promoted (Phase 8 condition unmet — needs live on-device discrimination test). `isUsingNeuralVad()==false`.
 - Translation: real Helsinki-NLP Opus-MT hi↔en (ONNX + vendored SentencePiece + JNI), structured result envelopes, session cache, staged smoke test, rollback-safe install.
 - Packet: compact binary v4 (msg-id exact, sender/recipient, HMAC per-peer, flags, TTL, hop).
@@ -116,3 +116,20 @@ defects found while reviewing the runtime paths were fixed:
 Enabling R8 would need on-device verification of Room and sherpa-onnx reflection
 paths, and no device was available in this cycle; the APK size is dominated by the
 265 MB of bundled models, not by code.
+
+## J. Open-source TTS for all 10 languages
+
+- `ModelCatalog.OPEN_SOURCE_ONLY = true`. Every language now has an open-licensed offline voice:
+  eSpeak NG (bundled, all 10) and optional Piper neural voices for en/mr/te/bn.
+- **Verified on the host, not on a device:** the vendored eSpeak NG core was built with mingw-gcc and produced
+  real audio (1.9–3.5 s, RMS ~3000/32768) for all 10 languages; the three converted Piper packs synthesize real
+  speech through sherpa-onnx. **Not verified:** the Android build of `libitantra_espeak.so` running on a phone,
+  speech quality by ear, RTF/latency on a device.
+- Quality risk: hi, ml, gu, kn, ta, or are eSpeak-only (robotic). This will likely score poorly on TTS legibility.
+- **Action needed:** the mr/te/bn Piper packs must be uploaded to release `tts-open-v1` (the `stackht` account used
+  here has no write access to the repo). Until then only eSpeak NG is used for them.
+- Removed the bundled 114 MB Coqui Bengali model (unverifiable license); the APK is ~110 MB smaller.
+- Fixed a latent build bug: the vendored SentencePiece CMake referenced training sources (`builder.h`) that are
+  not in the tree. It only built from a cached configure; a fresh clone could not build.
+- Corrected earlier false claims: Piper Hindi is CC-BY-NC-SA (not MIT); the bundled Bengali model's license was
+  self-contradictory.

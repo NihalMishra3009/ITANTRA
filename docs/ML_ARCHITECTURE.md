@@ -35,9 +35,8 @@ The rest of ITANTRA (pipeline, UI, networking) talks only to `SpeechModelManager
 | STT | **IndicConformer INT8** (mobile-optimized) | sherpa-onnx Paraformer | NOT a runtime dependency (published checkpoint is custom-split, not loadable as-is) |
 | STT | Whisper base int8 (existing fallback) | sherpa-onnx | ACTIVE (covers all 10 langs) |
 | TTS | **IndicF5 INT8** (high-quality, mobile-optimized) | sherpa-onnx | NOT a runtime dependency (safetensors, no English support, needs conversion) |
-| TTS | VITS / Piper voice packs (downloadable) | sherpa-onnx | ACTIVE for hi, en, ml, gu, bn |
-| TTS | Meta MMS-TTS intermediate (downloadable) | sherpa-onnx | ACTIVE for mr, kn, ta, te, or (hosted tar.bz2, SHA-256 verified) |
-| TTS | VITS bn (bundled fallback) | sherpa-onnx | ACTIVE |
+| TTS | eSpeak NG (bundled, GPL-3.0+) | native JNI (`libitantra_espeak.so`) | ACTIVE for all 10 languages (open-source floor) |
+| TTS | Piper voice packs (optional download) | sherpa-onnx | en, mr, te, bn — outrank eSpeak once installed |
 | VAD | Silero | sherpa-onnx | asset present but v4 incompatible → energy fallback |
 
 A pack is only considered `available` when its file actually exists (bundled asset OR downloaded to app-private storage). `bestAvailable(lang, role, deviceClass)` returns the highest-quality available pack the device can afford.
@@ -70,4 +69,4 @@ user picks a language
 
 ## 6. Deployment Reality
 
-The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **VITS/Piper/MMS** with bundled Bengali fallback plus downloadable voice packs for **all 10 languages**: Piper/Coqui/Mimic3 for hi, en, ml, gu, bn and hosted Meta MMS-TTS (converted ONNX) for mr, kn, ta, te, or. IndicConformer / IndicF5 are cataloged but **not runtime dependencies** of this prototype. This is reported honestly in the UI/diagnostics.
+The active offline STT is **Whisper base int8** (multilingual, all 10 languages). Active offline TTS is **open-source only**: bundled **eSpeak NG** covers all 10 languages, with optional downloadable Piper neural voices for en, mr, te, bn. IndicConformer / IndicF5 are cataloged but **not runtime dependencies** of this prototype. This is reported honestly in the UI/diagnostics.

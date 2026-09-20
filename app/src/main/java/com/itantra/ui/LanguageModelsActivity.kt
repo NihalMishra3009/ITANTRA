@@ -10,6 +10,7 @@ import androidx.core.content.ContextCompat
 import com.itantra.R
 import com.itantra.databinding.ActivityLanguageModelsBinding
 import com.itantra.speech.LanguageModelPack
+import com.itantra.speech.Mlruntime
 import com.itantra.speech.ModelRole
 import com.itantra.speech.PackStatus
 import com.itantra.speech.SpeechModelManager
@@ -329,10 +330,15 @@ class LanguageModelsActivity : AppCompatActivity() {
         layoutParams = LinearLayout.LayoutParams(w, 1)
     }
 
+    /** eSpeak NG ships inside the APK: nothing to download, nothing to delete. */
+    private fun isBundled(pack: LanguageModelPack): Boolean = pack.runtime == Mlruntime.ESPEAK_NG
+
     private fun descriptionText(sttWorking: Boolean, ttsStatus: PackStatus, tts: LanguageModelPack): String = when {
         ttsStatus == PackStatus.INSTALLED || ttsStatus == PackStatus.LOADED -> "Language pack installed — offline STT + TTS"
-        ttsStatus == PackStatus.NOT_INSTALLED && tts.downloadUrl != null -> "STT works (bundled). Download optional offline TTS voice."
-        else -> "STT works (bundled). No offline TTS voice published for this language yet."
+        isBundled(tts) -> "Offline STT + TTS work now (bundled open-source voice)."
+        ttsStatus == PackStatus.NOT_INSTALLED && tts.downloadUrl != null ->
+            "Offline STT + TTS work now (bundled open-source voice). Optional: download a higher-quality neural voice."
+        else -> "STT works (bundled). No offline TTS voice available for this language."
     }
 
     private fun roleBadge(label: String, ok: Boolean, mark: String, okColor: Int): TextView =
@@ -347,6 +353,7 @@ class LanguageModelsActivity : AppCompatActivity() {
         TextView(this).apply {
             val (mark, color) = when {
                 ts == PackStatus.INSTALLED || ts == PackStatus.LOADED -> "✓" to R.color.comm_green
+                isBundled(pack) -> "✓" to R.color.comm_green
                 ts == PackStatus.NOT_INSTALLED && pack.downloadUrl != null -> "↓" to R.color.comm_amber
                 else -> "—" to R.color.text_faint
             }
@@ -364,7 +371,8 @@ class LanguageModelsActivity : AppCompatActivity() {
             } else "installed"
         }
         PackStatus.NOT_INSTALLED ->
-            if (pack.sizeBytes > 0) String.format(Locale.US, "%.0f MB download", pack.sizeMb)
+            if (isBundled(pack)) "bundled with app"
+            else if (pack.sizeBytes > 0) String.format(Locale.US, "%.0f MB download", pack.sizeMb)
             else "—"
         else -> statusVerb(s)
     }
@@ -380,6 +388,7 @@ class LanguageModelsActivity : AppCompatActivity() {
 
     /** Per-language primary action — drives the independently-managed TTS role. */
     private fun primaryAction(pack: LanguageModelPack, s: PackStatus, progress: TextView): TextView = when {
+        isBundled(pack) -> smallButton("Bundled", R.color.comm_green) { /* ships in the APK */ }
         s == PackStatus.INSTALLED || s == PackStatus.LOADED -> smallButton("Delete", R.color.comm_red) {
             smm.distributionManager().deletePack(pack)
             render()

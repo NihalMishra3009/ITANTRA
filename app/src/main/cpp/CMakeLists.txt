@@ -40,3 +40,16 @@ set_target_properties(itantra_mt PROPERTIES
     CXX_VISIBILITY_PRESET hidden
     VISIBILITY_INLINES_HIDDEN ON
 )
+# ---------------------------------------------------------------------------
+# libitantra_espeak — offline rule-based TTS (eSpeak NG, GPL-3.0-or-later) used as
+# the open-source voice for every language that has no open-licensed neural voice.
+# The vendored library is built static and linked into this single shared object.
+# ---------------------------------------------------------------------------
+add_subdirectory(third_party/espeak-ng espeak-ng-build)
+
+add_library(itantra_espeak SHARED
+    itantra_espeak_core.c
+    itantra_espeak_jni.cpp
+)
+target_include_directories(itantra_espeak PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(itantra_espeak espeak-ng-static ${log-lib})

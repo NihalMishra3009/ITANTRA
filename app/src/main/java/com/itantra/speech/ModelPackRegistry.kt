@@ -9,6 +9,7 @@ enum class Mlruntime {
     SHERPA_VITS,      // existing VITS TTS via sherpa-onnx
     SHERPA_KOKORO,    // lightweight Kokoro TTS (placeholder)
     SHERPA_MATCHA,    // Matcha TTS (placeholder)
+    ESPEAK_NG,        // eSpeak NG rule-based TTS (open source, bundled, all 10 languages)
     ONNX_MT,          // Helsinki-NLP Opus-MT neural translation via ONNX Runtime
     ENERGY            // energy/fallback (non-ML), e.g. VAD fallback
 }
@@ -128,6 +129,23 @@ class ModelPackRegistry(
                     quality = QualityTier.MID,
                     license = "MIT (VITS)",
                     displayName = if (modelOk) "VITS ${lang.displayName} (existing)" else "VITS ${lang.displayName} (NOT INSTALLED)"
+                )
+            )
+            // Open-source floor: bundled eSpeak NG covers EVERY language, so no language
+            // is ever without an open-licensed voice. Neural voices outrank it when installed.
+            add(
+                ModelPack(
+                    language = lang,
+                    role = ModelRole.TTS,
+                    modelName = "eSpeak-NG",
+                    sizeBytes = assetSize("models/tts/espeak-ng-data.zip"),
+                    runtime = Mlruntime.ESPEAK_NG,
+                    quantization = Quantization.NONE,
+                    sampleRate = 22050,
+                    supportedDeviceClass = DeviceClass.LOW,
+                    quality = QualityTier.LOW,
+                    license = "GPL-3.0-or-later (eSpeak NG)",
+                    displayName = "eSpeak NG ${lang.displayName} (bundled, open source)"
                 )
             )
             // Primary high-quality TTS candidate (user-confirmed): IndicF5, INT8/mobile

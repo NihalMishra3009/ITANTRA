@@ -56,13 +56,15 @@ class ModelCatalogTest {
         val en = ModelCatalog.ttsPack("en")!!
         assertTrue("English must have a real downloadable voice", en.supportsLanguage)
         assertTrue("English TTS must be a real Piper voice", en.modelName.contains("Piper"))
+        assertTrue("English voice must be public domain", en.license.contains("Public domain"))
         assertTrue("Must have a real verified SHA-256", en.checksumSha256.isNotBlank())
         assertNotNull("Must have a real download URL", en.downloadUrl)
-        // Other Indic languages: Hindi uses real Piper too.
+        // Hindi has no open-licensed neural voice (Piper hi_IN is CC-BY-NC-SA): it is served
+        // by the bundled open-source eSpeak NG voice instead of an NC download.
         val hin = ModelCatalog.ttsPack("hi")!!
         assertTrue(hin.supportsLanguage)
-        assertTrue(hin.modelName.contains("Piper"))
-        assertTrue("Hindi voice SHA must be real", hin.checksumSha256.isNotBlank())
+        assertTrue(hin.modelName.contains("eSpeak"))
+        assertNull("eSpeak ships in the APK; nothing to download", hin.downloadUrl)
     }
 
     @Test
@@ -71,19 +73,23 @@ class ModelCatalogTest {
         for (lang in nine) {
             assertTrue("IndicConformer should support $lang", ModelCatalog.sttPack(lang)!!.supportsLanguage)
         }
-        // TTS: open-licensed languages have a real, verified download. Languages whose
-        // only voice is CC-BY-NC are honestly reported unavailable (open-source-only).
-        val open = setOf("hi", "ml", "bn")
+        // TTS: EVERY language must be genuinely supported by an open-source voice.
         for (lang in nine) {
             val tts = ModelCatalog.ttsPack(lang)!!
-            if (lang in open) {
-                assertTrue("$lang TTS must have a real download URL", tts.downloadUrl != null)
-                assertTrue("$lang TTS must have a real SHA-256", tts.checksumSha256.isNotBlank())
-                assertTrue("$lang TTS must be genuinely supported", tts.supportsLanguage)
-            } else {
-                assertFalse("$lang has only an NC voice; must not be claimed supported", tts.supportsLanguage)
-                assertNull("$lang must offer no download", tts.downloadUrl)
-            }
+            assertTrue("$lang TTS must be supported", tts.supportsLanguage)
+            assertTrue("$lang TTS license must be open: ${tts.license}", ModelCatalog.isOpenLicense(tts.license))
+        }
+        // Neural open voices are downloadable with a real SHA-256 for these languages.
+        for (lang in listOf("mr", "te", "bn")) {
+            val tts = ModelCatalog.ttsPack(lang)!!
+            assertNotNull("$lang neural voice URL", tts.downloadUrl)
+            assertEquals("$lang sha256 must be 64 hex", 64, tts.checksumSha256.length)
+        }
+        // The rest use the bundled eSpeak NG voice (no download).
+        for (lang in listOf("hi", "ml", "gu", "kn", "ta", "or")) {
+            val tts = ModelCatalog.ttsPack(lang)!!
+            assertEquals(Mlruntime.ESPEAK_NG, tts.runtime)
+            assertNull(tts.downloadUrl)
         }
         // English TTS genuinely available via Piper.
         assertTrue("en TTS must be downloadable", ModelCatalog.ttsPack("en")!!.downloadUrl != null)
@@ -100,15 +106,25 @@ class ModelCatalogTest {
     }
 
     @Test
-    fun testOpenSourceOnlyPolicyOffersNoNonCommercialPack() {
+    fun testOpenSourceOnlyPolicyOffersNoNonOpenPack() {
         assertTrue(ModelCatalog.OPEN_SOURCE_ONLY)
         assertTrue(
-            "no CC-BY-NC pack may be offered for download",
-            ModelCatalog.offeredNonCommercialPacks().isEmpty()
+            "no non-open TTS pack may be offered for download: " +
+                ModelCatalog.offeredNonOpenPacks().map { it.id + " " + it.license },
+            ModelCatalog.offeredNonOpenPacks().isEmpty()
         )
         assertTrue("MMS packs must not be exposed", ModelCatalog.mmsTtsPacks().isEmpty())
-        for (lang in listOf("gu", "mr", "kn", "ta", "te", "or")) {
-            assertTrue(ModelCatalog.ttsPack(lang)!!.notes.contains("NOT AVAILABLE"))
-        }
+    }
+
+    @Test
+    fun testLicenseGate() {
+        assertFalse(ModelCatalog.isOpenLicense("CC-BY-NC 4.0"))
+        assertFalse(ModelCatalog.isOpenLicense("CC-BY-NC-SA 4.0 (dataset)"))
+        assertFalse(ModelCatalog.isOpenLicense("Unverified (see URL)"))
+        assertTrue(ModelCatalog.isOpenLicense("MIT"))
+        assertTrue(ModelCatalog.isOpenLicense("Public domain (LJ Speech)"))
+        assertTrue(ModelCatalog.isOpenLicense("CC-BY 4.0 (AI4Bharat IndicVoices-R)"))
+        assertTrue(ModelCatalog.isOpenLicense("CC-BY-SA 4.0 (OpenSLR 37) + CMU Indic license"))
+        assertTrue(ModelCatalog.isOpenLicense("GPL-3.0-or-later (eSpeak NG)"))
     }
 }
