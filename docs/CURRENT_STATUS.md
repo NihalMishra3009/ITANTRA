@@ -1,6 +1,7 @@
 # CURRENT STATUS — iTantra (SIH 26173)
 
-Generated from the repository at commit range ending `2bb3cc5` (plus later fixes).
+Generated from the repository at commit range ending `01c2f02` (plus the build-repair
+and reliability fixes described in section I).
 Status vocabulary: IMPLEMENTED / UNIT TESTED / INTEGRATION TESTED /
 PHYSICALLY VERIFIED / NOT VERIFIED / BLOCKED.
 
@@ -19,12 +20,13 @@ PHYSICALLY VERIFIED / NOT VERIFIED / BLOCKED.
 
 ## B. What is unit tested (automated, passing)
 
-168 unit tests, 0 failures (`./gradlew testDebugUnitTest`). Covered: codec, security (tamper/replay/wrong-key/unknown-lang/payload-cap/unauth), mesh (relay/dup/ACK/lifecycle/emergency), SOS, translation parser, install rollback, storage contract, archive-entry policy, VAD state machine, benchmark math, transport selection, location.
+174 unit tests, 0 failures (`./gradlew testDebugUnitTest`). Covered: codec, security (tamper/replay/wrong-key/unknown-lang/payload-cap/unauth), mesh (relay/dup/ACK/lifecycle/emergency), outbox persistence (expiry + ACK row cleanup, insert/delete ordering), SOS, translation parser, install rollback, storage contract, archive-entry policy, VAD state machine, benchmark math, transport selection, location.
 
 ## C. What is integration tested
 
 - ONNX-vs-HF parity: `verify_onnx_parity.py` — 12/12 PASS (6 hi-en + 6 en-hi, incl. deterministic greedy, EOS behavior).
-- Full clean build: `./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintDebug` — SUCCESSFUL; lint 0 errors/fatals.
+- Full clean build: `./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintDebug` — SUCCESSFUL; lint 0 errors/fatals. (This claim was stale in the previous revision of this
+  document: the tree at `01c2f02` did **not** compile. See section I.)
 - Host translation latency measured (real) via `--bench`: hi-en decode ~184 ms, en-hi ~410 ms (host CPU, marked NOT device).
 
 ## D. What is physically tested
@@ -60,7 +62,7 @@ python benchmark/evaluate_wer.py       # honest skip until real WAVs exist
 python benchmark/evaluate_latency.py   # honest: NO measured data
 ```
 
-Results: 168/168 tests, lint 0 errors/fatals, release build SUCCESSFUL, parity 12/12.
+Results: 174/174 tests, lint 0 errors/fatals, signed release build SUCCESSFUL, parity 12/12.
 
 ## H. Device(s) used for any physical testing
 
@@ -68,3 +70,49 @@ Results: 168/168 tests, lint 0 errors/fatals, release build SUCCESSFUL, parity 1
   It validated the native translation adapter (NATIVE_TEST_OK) in a prior session.
   No two-phone test has EVER been performed. No device was stable enough during
   this validation cycle to complete the on-device translation-pack install.
+## I. Build repair + reliability fixes applied after `01c2f02`
+
+The committed tree at `01c2f02` did not build. It has been repaired, and several
+defects found while reviewing the runtime paths were fixed:
+
+**Build breaks (the app could not be compiled or installed at all):**
+
+- `AndroidManifest.xml` declared `.ui.TranslationTestActivity` twice — manifest
+  merger aborted `processDebugMainManifest`. De-duplicated.
+- `TranslationTestActivity.kt` passed `lparams(1) to 0` (a `Pair`) to
+  `LinearLayout.addView`, and called a non-existent `nativeEngineSelfTest()`
+  (the engine method is `nativeSelfTest()`). Both fixed.
+- `assembleRelease` produced `app-release-unsigned.apk`, which cannot be
+  installed. A release `signingConfig` now reads `keystore.properties` (git-ignored)
+  or the `ITANTRA_KEYSTORE_*` environment variables, and falls back to the debug key
+  so the release build always emits an installable apk. A fallback-signed apk is for
+  sideloading and demos only, not Play distribution.
+
+**Runtime defects:**
+
+- `PipelineOrchestrator.onPttPressed` collected `AudioRecorder.audioChunkFlow`
+  (a `SharedFlow`, which never completes) in a fresh coroutine on every press, and
+  never cancelled it. Collectors accumulated for the life of the process, each one
+  running VAD, partial STT and — in CONTINUOUS mode — utterance finalization on the
+  same chunks. Now exactly one capture job exists, cancelled on release/shutdown.
+- The inbound decode-and-play path was not serialized, so two packets arriving
+  together interleaved their `RECEIVING`/`SYNTHESIZING`/`PLAYING`/`IDLE` transitions
+  and the UI could read `IDLE` while audio was still playing. Now behind a mutex.
+- Outbox store-and-forward: an expired message left the in-memory queue but its Room
+  row survived, so every restart restored it again and the table grew without bound.
+  Insert and delete were also launched onto the shared IO pool from different call
+  sites, so a delete could overtake its own insert and orphan the row permanently.
+  Rows are now deleted on every removal path, and all outbox DB writes are serialized
+  onto a single-threaded dispatcher. Covered by `OutboxPersistenceTest` (verified to
+  fail without the fix).
+- `SttEngine.initialize` built a log label via `File(path).parentFile.name`, which
+  throws when the path has no parent. The throw happened *after* the recognizer had
+  loaded, so the surrounding catch discarded a working STT engine. Now null-safe.
+- `MainActivity.renderLatency` ended in a no-op `if (visible) { set visible }` block
+  (removed), and formatted RTF with the default locale, which renders Devanagari
+  digits on an `hi`-locale device. Now `Locale.US`.
+
+**Not changed (deliberately):** `isMinifyEnabled = false` is left off for release.
+Enabling R8 would need on-device verification of Room and sherpa-onnx reflection
+paths, and no device was available in this cycle; the APK size is dominated by the
+265 MB of bundled models, not by code.

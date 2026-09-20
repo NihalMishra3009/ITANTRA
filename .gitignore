@@ -18,3 +18,10 @@ local.properties
 *.apk
 *.aab
 /model-conversion/converted/
+
+# Release signing secrets (never committed)
+/keystore.properties
+*.jks
+*.keystore
+__pycache__/
+*.pyc

@@ -33,11 +33,19 @@ class MeshRoutingManager(
     companion object {
         private const val TAG = "MeshRoutingManager"
         private const val RETRY_INTERVAL_BASE_MS = 2000L
-        private const val SEEN_CACHE_MAX_SIZE = 500
     }
 
     private val scopeJob = SupervisorJob()
     private val coroutineScope = CoroutineScope(Dispatchers.IO + scopeJob)
+
+    /**
+     * Single-threaded dispatcher for every outbox DB write. Insert and delete for
+     * one message are launched from different call sites; on the shared IO pool they
+     * can run out of order, and a delete that lands before its insert leaves an
+     * orphaned row that is restored on every restart. Serializing keeps them FIFO.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private val dbDispatcher = Dispatchers.IO.limitedParallelism(1)
     
     // Outbox: Messages waiting for delivery or ACK (deque allows priority prepend)
     private val outboxQueue = ConcurrentLinkedDeque<QueuedMessage>()
@@ -110,7 +118,7 @@ class MeshRoutingManager(
         // Persist to disk so the message survives app restart (store-and-forward)
         val dao = outboxDao
         if (dao != null) {
-            coroutineScope.launch {
+            coroutineScope.launch(dbDispatcher) {
                 try {
                     dao.insert(
                         OutboxEntity(
@@ -173,12 +181,7 @@ class MeshRoutingManager(
                     it.isAcknowledged = true
                     outboxQueue.remove(it)
                 }
-                val dao = outboxDao
-                if (dao != null) {
-                    coroutineScope.launch {
-                        try { dao.delete(targetMsgId) } catch (e: Exception) { /* ignore */ }
-                    }
-                }
+                deletePersisted(targetMsgId)
                 deliveryTracker?.update(targetMsgId, DeliveryStatus.ACKNOWLEDGED)
                 pendingAcks[targetMsgId]?.complete(true)
                 return
@@ -279,12 +282,28 @@ class MeshRoutingManager(
         }
     }
 
+    /**
+     * [processOutbox] runs both on the 1 Hz worker and inline from
+     * [sendReliablePacket]. Without this guard the two can walk the deque at once
+     * and both bump the same item's retryCount, transmitting one message twice per
+     * backoff window. Single-flight: a concurrent caller simply skips the pass.
+     */
+    private val outboxPassRunning = java.util.concurrent.atomic.AtomicBoolean(false)
+
     private fun processOutbox() {
         if (!transportLayer.isConnected()) {
             // Destination or link offline -> Store-and-forward keeps messages safe in outboxQueue
             return
         }
+        if (!outboxPassRunning.compareAndSet(false, true)) return
+        try {
+            processOutboxPass()
+        } finally {
+            outboxPassRunning.set(false)
+        }
+    }
 
+    private fun processOutboxPass() {
         val now = System.currentTimeMillis()
         val iterator = outboxQueue.iterator()
 
@@ -296,6 +315,10 @@ class MeshRoutingManager(
                     deliveryTracker?.update(item.packet.messageId, DeliveryStatus.EXPIRED)
                 }
                 iterator.remove()
+                // Drop the persisted row too. Without this, an expired message is
+                // removed from the queue but its Room row survives, so every restart
+                // restores it again and the outbox table grows without bound.
+                deletePersisted(item.packet.messageId)
                 continue
             }
 
@@ -318,17 +341,12 @@ class MeshRoutingManager(
                     if (sent && item.packet.recipientId == "*") {
                         // Broadcast packets don't expect ACKs
                         iterator.remove()
-                        val dao = outboxDao
-                        if (dao != null) {
-                            coroutineScope.launch {
-                                try { dao.delete(item.packet.messageId) } catch (e: Exception) { /* ignore */ }
-                            }
-                        }
+                        deletePersisted(item.packet.messageId)
                     } else {
                         // Persist retry attempt so it survives restart
                         val dao2 = outboxDao
                         if (dao2 != null) {
-                            coroutineScope.launch {
+                            coroutineScope.launch(dbDispatcher) {
                                 try { dao2.updateAttempt(item.packet.messageId, item.retryCount, now) } catch (e: Exception) { /* ignore */ }
                             }
                         }
@@ -337,15 +355,18 @@ class MeshRoutingManager(
                     Log.w(TAG, "Message ${item.packet.messageId} exceeded max retries. Kept in store-and-forward pending reconnect.")
                     if (item.packet.isExpired()) {
                         iterator.remove()
-                        val dao = outboxDao
-                        if (dao != null) {
-                            coroutineScope.launch {
-                                try { dao.delete(item.packet.messageId) } catch (e: Exception) { /* ignore */ }
-                            }
-                        }
+                        deletePersisted(item.packet.messageId)
                     }
                 }
             }
+        }
+    }
+
+    /** Remove a message from the persistent outbox, if persistence is configured. */
+    private fun deletePersisted(messageId: String) {
+        val dao = outboxDao ?: return
+        coroutineScope.launch(dbDispatcher) {
+            try { dao.delete(messageId) } catch (e: Exception) { Log.w(TAG, "outbox delete failed: $messageId", e) }
         }
     }
 

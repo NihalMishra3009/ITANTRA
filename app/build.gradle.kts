@@ -1,8 +1,31 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     kotlin("kapt")
 }
+
+// Release signing is read from keystore.properties (git-ignored) or, in CI, from
+// the ITANTRA_KEYSTORE_* environment variables. When neither is present the
+// release build falls back to the debug key so `assembleRelease` still emits an
+// INSTALLABLE apk for field/demo use instead of an unsigned one. A fallback-signed
+// apk is fine for sideloading and demos; it is not a Play-distributable artifact.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps = Properties().apply {
+    if (keystorePropsFile.exists()) keystorePropsFile.inputStream().use { load(it) }
+}
+
+fun signingValue(key: String, env: String): String? =
+    (keystoreProps.getProperty(key) ?: System.getenv(env))?.takeIf { it.isNotBlank() }
+
+val releaseStoreFile = signingValue("storeFile", "ITANTRA_KEYSTORE_FILE")
+val releaseStorePassword = signingValue("storePassword", "ITANTRA_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "ITANTRA_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "ITANTRA_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword
+).all { it != null } && rootProject.file(releaseStoreFile!!).exists()
 
 android {
     namespace = "com.itantra"
@@ -21,8 +44,24 @@ android {
         }
     }
 
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = if (hasReleaseSigning) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -56,10 +95,10 @@ android {
 
     // Ensure libitantra_mt.so is packaged for both target ABIs (and that the
     // sherpa-bundled libonnxruntime.so is the single ORT copy on device).
-    packagingOptions {
+    packaging {
         jniLibs {
             // Only one libonnxruntime.so must ship — from sherpa onnx (same SONAME).
-            pickFirst("**/libonnxruntime.so")
+            pickFirsts.add("**/libonnxruntime.so")
         }
     }
 

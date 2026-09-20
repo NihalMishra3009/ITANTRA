@@ -177,7 +177,6 @@ class OpusMtTranslationEngine(
         sourceLanguage: String,
         targetLanguage: String
     ): Boolean {
-        if (modelDir == null) return false
         val enc = File(modelDir, "encoder_model.onnx").exists()
         val dec = File(modelDir, "decoder_model.onnx").exists()
         val cfg = File(modelDir, "config.json").exists()
@@ -186,8 +185,7 @@ class OpusMtTranslationEngine(
         val sentence = if (sourceLanguage.lowercase() == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
         return try {
             val native = parseNativeRaw(nnTranslate(modelDir.absolutePath, sentence))
-            val ok = native is NativeTranslateResult.Success &&
-                (native as NativeTranslateResult.Success).text.isNotBlank()
+            val ok = native is NativeTranslateResult.Success && native.text.isNotBlank()
             if (ok) Log.i(TAG, "Staged smoke test OK: $modelDir")
             else Log.w(TAG, "Staged smoke test FAILED: $modelDir")
             // Never leave the staged pair cached as the active pair.

@@ -118,7 +118,6 @@ class TtsEngine(
         val espeakDir = File(dir, "espeak-ng-data")
         val hasEspeak = File(dir, ".espeak").let { it.exists() && it.readText().trim() == "1" } &&
                 espeakDir.exists()
-        val useFilePaths = true
         currentLanguage = lang
         release()
         hasRealModel = false

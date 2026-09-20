@@ -1,6 +1,5 @@
 package com.itantra.ui
 
-import android.content.Context
 import android.os.Bundle
 import android.view.Gravity
 import android.view.View
@@ -63,8 +62,8 @@ class TranslationTestActivity : ComponentActivity() {
         root.addView(inputText)
 
         val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        row.addView(btn("TRANSLATE") { runTranslate() }, lparams(1) to 0)
-        row.addView(btn("LOAD MODEL") { runLoad() }, lparams(1) to 0)
+        row.addView(btn("TRANSLATE") { runTranslate() }, lparams(1))
+        row.addView(btn("LOAD MODEL") { runLoad() }, lparams(1))
         root.addView(row)
         val row2 = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
         row2.addView(
@@ -122,11 +121,11 @@ class TranslationTestActivity : ComponentActivity() {
         status("Release() executed; isLoaded=${engine?.isLoaded()}")
     }
 
-private fun runSelfTest() {
+    private fun runSelfTest() {
         // Native deterministic self-test (real engine, offline). Deliberately does
         // NOT report a WER — no measurement is fabricated for this harness.
         try {
-            val r = engine?.nativeEngineSelfTest() ?: "no-engine"
+            val r = engine?.nativeSelfTest() ?: "no-engine"
             val parse = r.startsWith("NATIVE_TEST_OK")
             status(if (parse) "SELF TEST OK — native engine executed" else "SELF TEST FAILED: $r")
         } catch (e: Exception) {

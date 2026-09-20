@@ -95,12 +95,11 @@ class VadStateMachine(
         // --- Silence region ---
         if (!isSpeaking) return VadEvent.SILENCE
 
-        var silenceDuration = 0L
         val tier = if (silenceStartTimeMs == 0L) {
             silenceStartTimeMs = nowMs
             VadEvent.SHORT_PAUSE
         } else {
-            silenceDuration = nowMs - silenceStartTimeMs
+            val silenceDuration = nowMs - silenceStartTimeMs
             when {
                 // LONG_SILENCE finalizes the utterance. It is only reachable when
                 // silence persists past SENTENCE_END — SENTENCE_END marks a boundary

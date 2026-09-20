@@ -108,7 +108,7 @@ class ModelStorageManager(private val context: Context) {
             val queue = java.util.ArrayDeque<File>()
             queue.add(dir)
             while (queue.isNotEmpty()) {
-                val f = queue.poll()
+                val f = queue.poll() ?: continue
                 if (f.isDirectory) {
                     f.listFiles()?.forEach { queue.add(it) }
                 } else if (!isIgnored(f.name)) {

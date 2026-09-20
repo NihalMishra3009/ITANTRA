@@ -226,7 +226,11 @@ class SttEngine(
 
             recognizer = OfflineRecognizer(assetManager = null, config = config)
             hasRealModel = true
-            val engineSuffix = if (File(encoderPath).parentFile.name.startsWith("stt_engine")) " (downloaded engine)" else ""
+            // parentFile is null for a bare filename; this is a log-label only and must
+            // never be able to throw, or the catch below would discard a recognizer that
+            // has already loaded successfully.
+            val engineSuffix =
+                if (File(encoderPath).parentFile?.name?.startsWith("stt_engine") == true) " (downloaded engine)" else ""
             modelManager.markLoaded(
                 ModelType.STT, lang.code,
                 File(encoderPath).length() + File(decoderPath).length()

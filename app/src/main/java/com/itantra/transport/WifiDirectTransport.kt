@@ -295,7 +295,7 @@ class WifiDirectTransport(
     @Synchronized
     override fun disconnect() {
         serverJob?.cancel()
-        for ((addr, peer) in peerConnections) {
+        for (peer in peerConnections.values) {
             peer.readerJob?.cancel()
             try {
                 peer.dataIn.close()

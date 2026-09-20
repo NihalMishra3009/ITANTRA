@@ -328,7 +328,7 @@ class BluetoothTransport(
     @Synchronized
     override fun disconnect() {
         listenerJob?.cancel()
-        for ((addr, peer) in peerConnections) {
+        for (peer in peerConnections.values) {
             peer.readerJob?.cancel()
             try {
                 peer.dataIn.close()

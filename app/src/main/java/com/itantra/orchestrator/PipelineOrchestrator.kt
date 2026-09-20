@@ -27,6 +27,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.withLock
 
 enum class OperatingMode {
     PUSH_TO_TALK,
@@ -216,6 +217,18 @@ class PipelineOrchestrator(
     }
 
     private val speechAudioBuffer = mutableListOf<Float>()
+
+    /**
+     * The single live microphone-collector job. [audioChunkFlow] is a SharedFlow that
+     * never completes, so a collector started on PTT-down would otherwise outlive the
+     * press forever: every subsequent press would stack another collector, each one
+     * running VAD, partial STT and (in CONTINUOUS mode) utterance finalization on the
+     * same chunks. Exactly one may be alive at a time.
+     */
+    private var captureJob: Job? = null
+
+    /** Serializes the inbound decode-and-play path (see [handleIncomingPacket]). */
+    private val receiveMutex = kotlinx.coroutines.sync.Mutex()
     private var isPttHeld = false
     private var isAlertNext = false
 
@@ -423,7 +436,8 @@ class PipelineOrchestrator(
         _transceiverState.value = TransceiverState.LISTENING
         audioRecorder.startRecording(coroutineScope)
 
-        coroutineScope.launch {
+        captureJob?.cancel()
+        captureJob = coroutineScope.launch {
             var lastPartialMs = 0L
             audioRecorder.audioChunkFlow.collect { chunk ->
                 if (!isPttHeld && operatingMode == OperatingMode.PUSH_TO_TALK) return@collect
@@ -478,6 +492,8 @@ class PipelineOrchestrator(
         isPttHeld = false
         speechEndTimestamp = BenchmarkLogger.nowMs()
         audioRecorder.stopRecording()
+        captureJob?.cancel()
+        captureJob = null
 
         finalizeUtteranceAndSend()
     }
@@ -742,6 +758,11 @@ class PipelineOrchestrator(
         translationLatency: Long = 0L
     ) {
         coroutineScope.launch {
+            // Half-duplex: one inbound utterance is decoded and played at a time.
+            // Without this, two packets arriving together interleave their
+            // RECEIVING/SYNTHESIZING/PLAYING/IDLE transitions, so the first one's
+            // playback runs while the UI already reads IDLE and PTT is re-enabled.
+            receiveMutex.withLock {
             val tReceive = BenchmarkLogger.nowMs()
             _transceiverState.value = TransceiverState.RECEIVING
 
@@ -815,6 +836,7 @@ class PipelineOrchestrator(
             } else {
                 _lastLatencyMetrics.value = null
             }
+            }
         }
     }
 
@@ -839,6 +861,8 @@ class PipelineOrchestrator(
     fun release() {
         if (!released.compareAndSet(false, true)) return
         Log.i(TAG, "PipelineOrchestrator.release(): cancelling background jobs")
+        try { captureJob?.cancel() } catch (_: Exception) {}
+        captureJob = null
         try { coroutineScope.cancel() } catch (_: Exception) {}
         try { meshRoutingManager?.release() } catch (_: Exception) {}
         try { transport?.disconnect() } catch (_: Exception) {}

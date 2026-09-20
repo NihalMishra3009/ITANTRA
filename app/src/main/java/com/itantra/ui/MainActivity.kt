@@ -311,11 +311,10 @@ class MainActivity : AppCompatActivity() {
 
         override fun getView(position: Int, convertView: View?, parent: android.view.ViewGroup): View {
             val v = inflate(convertView, parent)
-            v.findViewById<ImageView>(R.id.ivTransportIcon).backgroundTintList =
-                ContextCompat.getColorStateList(context, R.color.comm_green)
-            v.findViewById<ImageView>(R.id.ivTransportIcon).setImageResource(iconFor(position))
-            v.findViewById<ImageView>(R.id.ivTransportIcon).imageTintList =
-                ContextCompat.getColorStateList(context, R.color.comm_green)
+            val icon = v.findViewById<ImageView>(R.id.ivTransportIcon)
+            icon.backgroundTintList = ContextCompat.getColorStateList(context, R.color.comm_green)
+            icon.setImageResource(iconFor(position))
+            icon.imageTintList = ContextCompat.getColorStateList(context, R.color.comm_green)
             val tv = v.findViewById<TextView>(R.id.tvTransportLabel)
             tv.text = getItem(position)
             tv.setTextColor(ContextCompat.getColor(context, R.color.comm_green))
@@ -531,12 +530,9 @@ class MainActivity : AppCompatActivity() {
             translateLine +
             "Transport        ${metrics.transportLatencyMs} ms\n" +
             "TTS              ${metrics.ttsLatencyMs} ms\n" +
-            "RTF              ${String.format("%.2f", metrics.rtf)}\n" +
+            "RTF              ${String.format(java.util.Locale.US, "%.2f", metrics.rtf)}\n" +
             "────────────────────────\n" +
             "E2E              ${metrics.totalE2eLatencyMs} ms"
-        if (binding.tvLatencyMetrics.visibility == View.VISIBLE) {
-            binding.tvLatencyMetrics.visibility = View.VISIBLE
-        }
     }
 
     private fun renderIncomingDetails() {

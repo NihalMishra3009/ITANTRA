@@ -198,7 +198,6 @@ class NetworkDiscoveryManager(
         } else {
             // Refresh if newer/lower cost. Chain-wise equivalent route retains.
             if (hops <= existing.hopCount) {
-                val prev = existing
                 routeList[routeList.indexOf(existing)] = existing.copy(
                     hopCount = hops,
                     lastSeenMs = now,
