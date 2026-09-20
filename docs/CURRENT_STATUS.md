@@ -218,7 +218,17 @@ at release, and the message was delivered and spoken in both directions.
 6. `ACCESS_FINE_LOCATION` was capped at API 30 in the manifest, so Wi-Fi Direct discovery failed with error 0 on
    Android 12+. Cap removed (Wi-Fi Direct itself is still untested).
 
-**Not tested / known gaps:** three or more phones (multi-hop relay); Wi-Fi Direct; SOS over BLE and alert volume
-(the OPPO dropped off USB before the SOS run); receiving with the screen off (the OS freezes background apps; needs a
-foreground service, not built); battery drain of continuous advertising + scanning; the microphone (a debug hook feeds
-a WAV in place of the mic, so real capture/VAD was not exercised in this run). USB kept dropping one phone at a time.
+**Also verified on the two phones:**
+- **SOS over BLE:** pressing SOS on the OPPO was delivered to the Moto, which synthesized the alert, raised the alarm
+  stream volume to its maximum (5 -> 7), played it, and restored the volume afterwards. Not verified: that alert
+  playback is non-interruptible by other audio.
+- **Real microphone path:** with the real push-to-talk button held (adb long-press) and the test speech played out of
+  the OPPO's speaker into its own microphone, the app captured it, passed VAD, produced the live caption
+  ("please send help") and the final transcript ("please send help to the river bridge."), sent it over BLE, and the
+  Moto spoke it. This is an acoustic loop-back with synthetic speech, not a person speaking in a room.
+- Unmeasured latency segments now display as a dash instead of "0 ms".
+
+**Not tested / known gaps:** three or more phones (multi-hop relay); Wi-Fi Direct; receiving with the screen off (the
+OS freezes background apps; needs a foreground service, not built); battery drain of continuous advertising +
+scanning; a human speaking in a real room (noise, distance, accents); full-duplex "phone" mode. USB kept dropping one
+phone at a time during testing.

@@ -137,6 +137,21 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Debug builds only: play a WAV from filesDir through the speaker, so a REAL push-to-talk hold
+     * (e.g. `adb shell input swipe x y x y 9000` on the button) records it back through the real
+     * microphone. Exercises capture -> VAD -> STT without a person speaking.
+     */
+    private fun debugPlayWav(i: android.content.Intent) {
+        val f = java.io.File(filesDir, i.getStringExtra("file") ?: return)
+        if (!f.isFile) return
+        val b = f.readBytes()
+        val pcm = ShortArray((b.size - 44) / 2) { k -> ((b[44 + 2 * k].toInt() and 0xFF) or (b[45 + 2 * k].toInt() shl 8)).toShort() }
+        kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            audioPlayer.playPcm(pcm, 16000, false)
+        }
+    }
+
+    /**
      * Debug builds only. Simulates a user holding push-to-talk: press (which starts finding and
      * connecting to nearby phones), "speak" the WAV in filesDir, hold for `hold_ms`, release.
      *   adb shell am broadcast -a com.itantra.debug.SPEAK_WAV -p com.itantra --es file utt.wav --ei hold_ms 8000
@@ -175,6 +190,7 @@ class MainActivity : AppCompatActivity() {
         val receiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
                 if (i?.action == "com.itantra.debug.SPEAK_WAV") { debugSpeakWav(i); return }
+                if (i?.action == "com.itantra.debug.PLAY_WAV") { debugPlayWav(i); return }
                 val text = i?.getStringExtra("text")
                     ?: i?.getStringExtra("text_b64")?.let {
                         String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
@@ -184,6 +200,7 @@ class MainActivity : AppCompatActivity() {
         }
         val filter = android.content.IntentFilter("com.itantra.debug.SEND_TEXT")
         filter.addAction("com.itantra.debug.SPEAK_WAV")
+        filter.addAction("com.itantra.debug.PLAY_WAV")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
         } else {
@@ -587,20 +604,25 @@ class MainActivity : AppCompatActivity() {
             binding.tvLatencyMetrics.text = getString(R.string.latency_placeholder)
             return
         }
-        binding.tvPerfSummary.text = getString(R.string.latency_ms, metrics.totalE2eLatencyMs)
+        // 0 = not measured on this phone (a receiver never sees the sender's speech time).
+        // Show a dash, never a number that looks like a measurement.
+        fun ms(v: Long) = if (v > 0L) "$v ms" else "—"
+        binding.tvPerfSummary.text =
+            if (metrics.totalE2eLatencyMs > 0L) getString(R.string.latency_ms, metrics.totalE2eLatencyMs)
+            else getString(R.string.latency_placeholder)
         val translateLine = if (metrics.translationLatencyMs > 0) {
             "Translation     ${metrics.translationLatencyMs} ms\n"
         } else {
             ""
         }
         binding.tvLatencyMetrics.text =
-            "STT              ${metrics.sttLatencyMs} ms\n" +
+            "STT              ${ms(metrics.sttLatencyMs)}\n" +
             translateLine +
-            "Transport        ${metrics.transportLatencyMs} ms\n" +
-            "TTS              ${metrics.ttsLatencyMs} ms\n" +
+            "Transport        ${ms(metrics.transportLatencyMs)}\n" +
+            "TTS              ${ms(metrics.ttsLatencyMs)}\n" +
             "RTF              ${String.format(java.util.Locale.US, "%.2f", metrics.rtf)}\n" +
             "────────────────────────\n" +
-            "E2E              ${metrics.totalE2eLatencyMs} ms"
+            "E2E              ${ms(metrics.totalE2eLatencyMs)}"
     }
 
     private fun renderIncomingDetails() {
