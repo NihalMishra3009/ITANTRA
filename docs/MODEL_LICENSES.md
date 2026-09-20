@@ -21,6 +21,17 @@ Licenses for models referenced by the repository. Publicly downloadable does not
 | Mimic3 gu_IN-cmu-indic (low) | Gujarati | **CC-BY-NC 4.0** | **Yes** | Non-commercial; flagged in Models UI |
 | Meta MMS-TTS (mr/kn/ta/te/or) | Marathi/Kannada/Tamil/Telugu/Odia | **CC-BY-NC 4.0** | **Yes** | Non-commercial; hosted on iTantra release, SHA-256 verified |
 
+**Policy (enforced in code):** `ModelCatalog.OPEN_SOURCE_ONLY = true`. The two CC-BY-NC
+rows above (Mimic3 Gujarati, Meta MMS-TTS mr/kn/ta/te/or) are **not offered, downloaded
+or advertised**; those six languages report TTS as NOT AVAILABLE until an open-licensed
+voice with a verified URL and SHA-256 is added. Effective open TTS today: Hindi, English,
+Malayalam, Bengali. `ModelCatalogTest.testOpenSourceOnlyPolicyOffersNoNonCommercialPack`
+guards this. The catalog code for the NC voices is retained behind the flag only.
+
+**Unresolved license inconsistency:** `ModelPackRegistry` labels IndicConformer and
+IndicF5 "CC-BY-NC (verify)" while `ModelCatalog` labels them MIT. Neither is an installed
+asset; confirm the per-checkpoint license upstream before adopting either.
+
 ## Offline Neural Translation (cross-language)
 
 | Model | Pair | License | Runtime | Notes |

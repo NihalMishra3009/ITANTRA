@@ -33,6 +33,23 @@ import com.itantra.translation.TranslationCatalog
  */
 object ModelCatalog {
 
+    /**
+     * Project rule: open-source models only. When true, any voice whose license has a
+     * non-commercial clause (CC-BY-NC: Meta MMS-TTS, Mimic3 gu_IN) is NEVER offered,
+     * downloaded or advertised; the affected languages report TTS as unavailable until
+     * an open-licensed voice with a verified URL + SHA-256 is added. Flip to false only
+     * for a private, non-distributed demo.
+     */
+    const val OPEN_SOURCE_ONLY = true
+
+    /** Languages whose only known offline TTS voice is non-commercial. */
+    private fun onlyNonCommercialTts(code: String): Boolean =
+        realVoices[code]?.restrictedLicense == true || code in mmsSha
+
+    /** Every pack the catalog would OFFER (download URL present) with a non-commercial license. */
+    fun offeredNonCommercialPacks(): List<LanguageModelPack> =
+        packs().filter { it.downloadUrl != null && it.license.contains("-NC", ignoreCase = true) }
+
     /** Whether a language is genuinely covered by the IndicConformer multilingual STT pack. */
     private val indicConformerLangs = setOf(
         "hi", "gu", "mr", "kn", "ml", "ta", "te", "or", "bn"
@@ -81,6 +98,27 @@ object ModelCatalog {
     private fun ttsPack(lang: SupportedLanguage): LanguageModelPack {
         val supported = lang.code in indicF5Langs
         // Real, verified, loadable Piper/Coqui/Mimic3 TTS voices.
+        if (OPEN_SOURCE_ONLY && onlyNonCommercialTts(lang.code)) {
+            return LanguageModelPack(
+                id = "tts_${lang.code}",
+                language = lang,
+                role = ModelRole.TTS,
+                modelName = "none (open-source-only policy)",
+                version = "",
+                sizeBytes = 0L,
+                checksumSha256 = "",
+                license = "n/a",
+                runtime = Mlruntime.SHERPA_VITS,
+                quantization = Quantization.INT8,
+                sampleRate = 22050,
+                supportedDeviceClass = DeviceClass.MID,
+                downloadUrl = null,
+                isMultilingualShared = false,
+                supportsLanguage = false,
+                notes = "NOT AVAILABLE: the only known offline ${lang.displayName} TTS voice is " +
+                    "non-commercial (CC-BY-NC) and is excluded by the open-source-only policy."
+            )
+        }
         val realVoice = realVoices[lang.code]
         if (realVoice != null) {
             return LanguageModelPack(
@@ -237,7 +275,7 @@ object ModelCatalog {
      *  Converted + verified ONNX artifacts are HOSTED on the iTantra GitHub release
      *  `mms-tts` (see model-conversion/convert_mms_tts_onnx.py). Download → verify
      *  SHA-256 → extract → fully offline TTS for these languages. */
-    fun mmsTtsPacks(): List<LanguageModelPack> = listOf(
+    fun mmsTtsPacks(): List<LanguageModelPack> = if (OPEN_SOURCE_ONLY) emptyList() else listOf(
         mmsPack("mr"),
         mmsPack("kn"),
         mmsPack("ta"),

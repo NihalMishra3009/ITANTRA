@@ -71,14 +71,19 @@ class ModelCatalogTest {
         for (lang in nine) {
             assertTrue("IndicConformer should support $lang", ModelCatalog.sttPack(lang)!!.supportsLanguage)
         }
-        // TTS: every language now has a genuinely downloadable voice with a real
-        // SHA-256. Piper/Coqui/Mimic3 cover hi/gu/ml/bn/en; hosted MMS-TTS covers
-        // the other 5 Indic languages (mr/kn/ta/te/or).
+        // TTS: open-licensed languages have a real, verified download. Languages whose
+        // only voice is CC-BY-NC are honestly reported unavailable (open-source-only).
+        val open = setOf("hi", "ml", "bn")
         for (lang in nine) {
             val tts = ModelCatalog.ttsPack(lang)!!
-            assertTrue("$lang TTS must have a real download URL", tts.downloadUrl != null)
-            assertTrue("$lang TTS must have a real SHA-256", tts.checksumSha256.isNotBlank())
-            assertTrue("$lang TTS must be genuinely supported", tts.supportsLanguage)
+            if (lang in open) {
+                assertTrue("$lang TTS must have a real download URL", tts.downloadUrl != null)
+                assertTrue("$lang TTS must have a real SHA-256", tts.checksumSha256.isNotBlank())
+                assertTrue("$lang TTS must be genuinely supported", tts.supportsLanguage)
+            } else {
+                assertFalse("$lang has only an NC voice; must not be claimed supported", tts.supportsLanguage)
+                assertNull("$lang must offer no download", tts.downloadUrl)
+            }
         }
         // English TTS genuinely available via Piper.
         assertTrue("en TTS must be downloadable", ModelCatalog.ttsPack("en")!!.downloadUrl != null)
@@ -92,5 +97,18 @@ class ModelCatalogTest {
         assertNotEquals("stt_hi", "tts_hi")
         assertTrue("stt_hi".startsWith("stt"))
         assertTrue("tts_hi".startsWith("tts"))
+    }
+
+    @Test
+    fun testOpenSourceOnlyPolicyOffersNoNonCommercialPack() {
+        assertTrue(ModelCatalog.OPEN_SOURCE_ONLY)
+        assertTrue(
+            "no CC-BY-NC pack may be offered for download",
+            ModelCatalog.offeredNonCommercialPacks().isEmpty()
+        )
+        assertTrue("MMS packs must not be exposed", ModelCatalog.mmsTtsPacks().isEmpty())
+        for (lang in listOf("gu", "mr", "kn", "ta", "te", "or")) {
+            assertTrue(ModelCatalog.ttsPack(lang)!!.notes.contains("NOT AVAILABLE"))
+        }
     }
 }
