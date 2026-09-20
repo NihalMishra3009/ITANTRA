@@ -79,11 +79,14 @@ Key design decisions:
 ## Cross-language runtime status
 
 - **Architecture (all 10 languages, EN-pivot):** COMPLETE (unit-tested)
-- **Native runtime (JNI + real SentencePiece + ORT):** COMPLETE — compiled and
-  verified loading on a physical ARM64 device; tokenizer parity 6/6 vs HF
-- **Model artifacts (18 EN↔X ONNX packs):** NOT COMPLETE (requires
-  `convert_opus_mt_onnx.py` run + hosting)
-- **Real device HI↔EN translation verified:** NOT VERIFIED
+- **Native runtime (JNI + Marian tokenizer + ORT):** WORKING for hi↔en on two physical
+  ARM64 phones. (An earlier revision claimed "tokenizer parity 6/6"; that test fed the
+  model Hugging Face's ids and could not see that the native code used different, wrong
+  ones, so on-device output was garbage until the Marian tokenizer was added. The check
+  is now `model-conversion/verify_native_tokenizer.py`, which mirrors the native steps.)
+- **Model artifacts:** only hi↔en exist. Open Opus-MT has no gu/kn/ta/te/or models;
+  IndicTrans2 (MIT) would cover all ten and has not been started.
+- **Real device HI↔EN translation verified:** YES on two phones (OPPO CPH2127, moto g32) after the Marian-tokenizer fix; output identical to Hugging Face. **Only these 2 of the 90 directed language pairs translate today.** The other 88 are delivered and spoken untranslated.
 
 ---
 

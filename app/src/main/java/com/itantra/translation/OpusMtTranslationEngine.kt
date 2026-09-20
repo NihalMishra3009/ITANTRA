@@ -74,6 +74,10 @@ class OpusMtTranslationEngine(
     companion object {
         private const val TAG = "OpusMtTranslation"
         const val ROLE_DIR = "models/translation"
+
+        /** Bundled Marian tokenizer files per pair: source.spm, target.spm, vocab.tsv. */
+        const val TOKENIZER_ASSET_DIR = "models/translation-tokenizers"
+        private val TOKENIZER_FILES = listOf("source.spm", "target.spm", "vocab.tsv")
         private const val NATIVE_LIB = "itantra_mt"
         private var nativeLoaded = false
         private var loadAttempted = false
@@ -151,6 +155,33 @@ class OpusMtTranslationEngine(
 
     override fun isLoaded(): Boolean = loaded.get()
 
+    /**
+     * The native runtime needs the Marian tokenizer (source/target SentencePiece + the vocab table).
+     * The hosted packs predate that and only carry a bare SentencePiece model, which is NOT enough:
+     * ids from it are unrelated to the model's vocabulary and produce garbage translations. Copy the
+     * bundled tokenizer files into the pack when they are missing.
+     */
+    private fun ensureTokenizerFiles(packDir: File, pairKey: String): Boolean {
+        val tokDir = File(packDir, "tokenizer")
+        fun present(f: String) = File(tokDir, f).let { it.isFile && it.length() > 0 }
+        if (TOKENIZER_FILES.all(::present)) return true
+        tokDir.mkdirs()
+        for (f in TOKENIZER_FILES) {
+            if (present(f)) continue
+            val dst = File(tokDir, f)
+            try {
+                context.assets.open("$TOKENIZER_ASSET_DIR/$pairKey/$f").use { i ->
+                    dst.outputStream().use { o -> i.copyTo(o) }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "No tokenizer file $f for $pairKey (not bundled, not in pack)", e)
+                dst.delete()
+                return false
+            }
+        }
+        return true
+    }
+
     @Synchronized
     fun ensureLoaded(sourceLanguage: String, targetLanguage: String): Boolean {
         val key = modelKey(sourceLanguage, targetLanguage)
@@ -159,6 +190,10 @@ class OpusMtTranslationEngine(
         // Native load happens lazily in translate(); this only checks pack files.
         if (!File(dir, "encoder_model.onnx").exists() || !File(dir, "decoder_model.onnx").exists()) {
             Log.i(TAG, "Translation model not installed for $key (encoder/decoder missing)")
+            release()
+            return false
+        }
+        if (!ensureTokenizerFiles(dir, key)) {
             release()
             return false
         }
@@ -181,6 +216,7 @@ class OpusMtTranslationEngine(
         val dec = File(modelDir, "decoder_model.onnx").exists()
         val cfg = File(modelDir, "config.json").exists()
         if (!enc || !dec || !cfg) return false
+        if (!ensureTokenizerFiles(modelDir, modelKey(sourceLanguage, targetLanguage))) return false
         if (!ensureNativeLoaded()) return false
         val sentence = if (sourceLanguage.lowercase() == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
         return try {
@@ -217,6 +253,8 @@ class OpusMtTranslationEngine(
             val latencyMs = (System.nanoTime() - start) / 1_000_000
             when (native) {
                 is NativeTranslateResult.Success -> {
+                    Log.i(TAG, "translate $sourceLanguage->$targetLanguage in=${text.length}ch out=${native.text.length}ch " +
+                        "wall=${latencyMs}ms nativeTiming=${native.timing} :: '${native.text.take(120)}'")
                     native.timing?.let { com.itantra.benchmark.BenchmarkLogger.logTranslationTiming(it) }
                     TranslationResult(
                         native.text, sourceLanguage, targetLanguage, latencyMs, success = true)

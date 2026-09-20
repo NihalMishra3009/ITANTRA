@@ -1,3 +1,6 @@
 app/src/main/assets/models/**/*.onnx filter=lfs diff=lfs merge=lfs -text
 app/libs/*.aar filter=lfs diff=lfs merge=lfs -text
 app/src/main/assets/models/**/tokens.txt filter=lfs diff=lfs merge=lfs -text
+
+# Marian tokenizer tables are read byte-for-byte by native code: never rewrite line endings.
+app/src/main/assets/models/translation-tokenizers/** -text

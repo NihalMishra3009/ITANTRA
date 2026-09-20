@@ -191,6 +191,21 @@ class MainActivity : AppCompatActivity() {
             override fun onReceive(c: android.content.Context?, i: android.content.Intent?) {
                 if (i?.action == "com.itantra.debug.SPEAK_WAV") { debugSpeakWav(i); return }
                 if (i?.action == "com.itantra.debug.PLAY_WAV") { debugPlayWav(i); return }
+                if (i?.action == "com.itantra.debug.SET_LANG") {
+                    // This phone's language preference: what its user speaks AND wants to hear.
+                    i.getStringExtra("lang")?.let {
+                        val l = com.itantra.stt.SupportedLanguage.fromCode(it)
+                        orchestrator.currentLanguage = l
+                        orchestrator.targetLanguage = l
+                    }
+                    return
+                }
+                i?.getStringExtra("lang")?.let {
+                    // Typed text in a given language (the sender's own language).
+                    val l = com.itantra.stt.SupportedLanguage.fromCode(it)
+                    orchestrator.currentLanguage = l
+                    orchestrator.targetLanguage = l
+                }
                 val text = i?.getStringExtra("text")
                     ?: i?.getStringExtra("text_b64")?.let {
                         String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
@@ -201,6 +216,7 @@ class MainActivity : AppCompatActivity() {
         val filter = android.content.IntentFilter("com.itantra.debug.SEND_TEXT")
         filter.addAction("com.itantra.debug.SPEAK_WAV")
         filter.addAction("com.itantra.debug.PLAY_WAV")
+        filter.addAction("com.itantra.debug.SET_LANG")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
         } else {

@@ -121,6 +121,9 @@ class PipelineOrchestrator(
     var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
         set(value) {
             if (field != value) {
+                // The target follows the spoken language until the user deliberately picks a
+                // different one; otherwise switching to English would silently start translating.
+                if (targetLanguage == field) targetLanguage = value
                 field = value
                 // Heavy model (re)initialization is deferred off the calling thread
                 // (Mirrors the UI thread — sherpa load is slow and must not block the
@@ -827,15 +830,41 @@ class PipelineOrchestrator(
                 "[${packet.senderId}] " + packet.text
             deliveryTracker.update(packet.messageId, com.itantra.transport.DeliveryStatus.PLAYING, packet.hopCount)
 
-            // Switch TTS model to packet language if needed (no synthesize() probe —
+            // RECEIVER-SIDE LANGUAGE PREFERENCE: this phone speaks its OWN language. If the sender
+            // used another one, translate here (emergencies are never translated).
+            var spokenText = packet.text
+            var spokenLang = packet.language
+            var totalTranslationMs = translationLatency
+            val myLang = currentLanguage.code
+            if (com.itantra.translation.ReceiverLanguagePolicy.plan(packet.language, myLang, isEmergency) ==
+                com.itantra.translation.ReceiverLanguagePolicy.Plan.TRANSLATE
+            ) {
+                _transceiverState.value = TransceiverState.TRANSLATING
+                val res = speechModelManager.translate(packet.text, packet.language, myLang)
+                if (res.success && res.translatedText.isNotBlank()) {
+                    spokenText = res.translatedText
+                    spokenLang = myLang
+                    totalTranslationMs += res.latencyMs
+                    _lastReceivedText.value = "[${packet.senderId}] $spokenText  (${packet.language}: ${packet.text})"
+                    Log.i(TAG, "RX translate ${packet.language}->$myLang ${res.latencyMs}ms")
+                } else {
+                    // Honest fallback: never drop a message because a model is missing. Speak it in
+                    // the sender's language and say so.
+                    Log.w(TAG, "RX translate ${packet.language}->$myLang UNAVAILABLE (${res.error}); speaking original")
+                    _lastReceivedText.value = "[${packet.senderId}] ${packet.text}  " +
+                        "(not translated: ${res.error ?: "no model for ${packet.language}→$myLang"})"
+                }
+            }
+
+            // Switch TTS model to the language actually being spoken (no synthesize() probe —
             // explicit state inspection instead).
-            if (!ttsEngine.isLoadedFor(packet.language)) {
-                ttsEngine.initialize(packet.language)
+            if (!ttsEngine.isLoadedFor(spokenLang)) {
+                ttsEngine.initialize(spokenLang)
             }
 
             _transceiverState.value = TransceiverState.SYNTHESIZING
             val tTtsStart = BenchmarkLogger.nowMs()
-            val ttsResult = speechModelManager.synthesize(text = packet.text, langCode = packet.language, isAlert = packet.isAlert)
+            val ttsResult = speechModelManager.synthesize(text = spokenText, langCode = spokenLang, isAlert = packet.isAlert)
             val tTtsEnd = BenchmarkLogger.nowMs()
 
             _transceiverState.value = TransceiverState.PLAYING
@@ -869,7 +898,7 @@ class PipelineOrchestrator(
             // (STT, TTS, playback) use the monotonic clock.
             val record = BenchmarkLogger.logInteraction(
                 messageId = packet.messageId,
-                language = packet.language,
+                language = spokenLang,
                 isAlert = packet.isAlert,
                 tSpeechStart = tSpeechStart,
                 tSpeechEnd = tSpeechEnd,
@@ -880,7 +909,7 @@ class PipelineOrchestrator(
                 tTtsStart = tTtsStart,
                 tTtsEnd = tTtsEnd,
                 tPlayStart = tPlayStart,
-                translationLatencyMs = translationLatency
+                translationLatencyMs = totalTranslationMs
             )
             // Only surface a latency record to the UI if it contains at least one
             // real measurement (never show a fabricated 0ms E2E).

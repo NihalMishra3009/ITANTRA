@@ -232,3 +232,37 @@ at release, and the message was delivered and spoken in both directions.
 OS freezes background apps; needs a foreground service, not built); battery drain of continuous advertising +
 scanning; a human speaking in a real room (noise, distance, accents); full-duplex "phone" mode. USB kept dropping one
 phone at a time during testing.
+
+## M. Different language on each phone (receiver-side preference), all 90 pairs
+
+**Behaviour:** each phone has one language: what its user speaks and what it wants to hear. The sender transmits text in
+ITS language; every receiver translates to ITS OWN (`ReceiverLanguagePolicy`). One broadcast can therefore reach phones
+with different preferences. Emergency (SOS) is never translated. If no translation model exists the message is still
+delivered and spoken in the sender's language, and the screen says it was not translated.
+
+**Test:** OPPO sends typed text (the same "I need help, please send assistance" in each language), Moto receives with a
+DIFFERENT language set, over BLE, for every one of the 90 directed pairs of the 10 languages.
+
+| Result | Pairs |
+|---|---|
+| Delivered | 90 / 90 |
+| **Translated into the receiver's language** | **2 / 90** (English->Hindi, Hindi->English) |
+| Delivered, spoken untranslated (no model) | 88 / 90 |
+
+Translation time for the 2 working pairs on the phones: about 0.4-0.6 s warm, about 4.5 s the first time (loading a
+~500 MB model; the cache holds one direction, so alternating directions reloads it).
+
+**Missing models (the blocker for the other 88):** the open Opus-MT set only has dedicated pairs for hi, mr, ml (both
+directions) and bn (to English only); nothing for gu, kn, ta, te, or. AI4Bharat IndicTrans2 (MIT) covers all ten in two
+models but needs a real conversion + tokenizer effort and has not been started.
+
+**Critical bug found and fixed:** on-device translation had NEVER worked. The native runtime fed the encoder raw
+SentencePiece ids instead of the Marian vocabulary ids (and no end-of-sentence token) and decoded the same wrong way, so
+English->Hindi produced random English words for the 64-step limit (8-45 s, 30 s of nonsense speech). The PC parity test
+fed Hugging Face's ids, so it could not see this. Fixed with a Marian-exact tokenizer (source.spm -> vocab ids -> </s>;
+ids -> vocab -> target.spm), the tokenizer files bundled in the APK for the two hosted packs, and
+`model-conversion/verify_native_tokenizer.py`, which mirrors the native algorithm and checks it against Hugging Face
+(both packs pass). On the phones the output now equals the PC/Hugging Face output exactly.
+
+**Not tested:** translation from real speech (STT of Hindi is weak on Whisper base; the matrix used typed text); a
+third phone with a third language; the on-device pack install of the 500 MB translation packs (packs were pushed by adb).

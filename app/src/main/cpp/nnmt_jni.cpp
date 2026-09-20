@@ -12,13 +12,11 @@
  *   decoder_model.onnx
  *   config.json  ("decoder_start_token_id", "pad_token_id", "eos_token_id",
  *                 "vocab_size")
- *   tokenizer/sp.vocab  (SentencePiece vocab: "<id>\t<piece>", id = index)
+ *   tokenizer/source.spm, tokenizer/target.spm  (Marian SentencePiece models)
+ *   tokenizer/vocab.tsv  ("<id>\t<piece>": the model's vocab, NOT the SentencePiece ids)
  *
- * TOKENIZATION   : longest-substring match over the REAL SentencePiece vocab
- *                  (deterministic; NOT whitespace splitting). Full SentencePiece
- *                  parity for every input is the documented enhancement — the
- *                  required test sentences are asserted against HF via the
- *                  sentencepiece parity harness (model-conversion, python).
+ * TOKENIZATION   : Marian-exact — source.spm pieces -> vocab.tsv ids -> </s>; output ids ->
+ *                  vocab pieces -> target.spm detokenization (see PackModel).
  * SEQ2SEQ       : encoder "input_ids" -> "last_hidden_state"[1,S,D];
  *                 decoder "input_ids"+"encoder_hidden_states" -> "logits"[1,T,V].
  * Greedy decode bounded (maxSteps).
@@ -35,6 +33,8 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <algorithm>
+#include <unordered_map>
 #include <fstream>
 #include <sstream>
 #include <cstdint>
@@ -89,8 +89,16 @@ void releaseSessionEnv(OrtEnv* e, OrtSession* s1, OrtSession* s2) {
 }
 
 struct PackModel {
-    sentencepiece::SentencePieceProcessor sp;   // real SentencePiece (Marian-exact)
-    int64_t pad_id = 0, bos_id = 0, eos_id = 0, decoder_start_id = 0;
+    // Marian tokenization is THREE things, not one: a SOURCE SentencePiece model that splits text
+    // into pieces, a shared VOCAB table that maps each piece to the model's token id, and a TARGET
+    // SentencePiece model that turns output pieces back into text. The vocab ids are NOT the
+    // SentencePiece ids. Feeding raw SentencePiece ids (what this file used to do) hands the
+    // encoder unrelated tokens and the decoder emits random words up to the step limit.
+    sentencepiece::SentencePieceProcessor srcSp;
+    sentencepiece::SentencePieceProcessor tgtSp;
+    std::vector<std::string> id2tok;                 // vocab id -> piece
+    std::unordered_map<std::string, int64_t> tok2id; // piece -> vocab id
+    int64_t pad_id = 0, bos_id = 0, eos_id = 0, unk_id = 1, decoder_start_id = 0;
     bool spReady = false;
 };
 
@@ -113,29 +121,64 @@ bool loadConfig(const std::string& dir, PackModel& m) {
     return true;
 }
 
-// Real SentencePiece: on-device tokenizer must produce IDENTICAL ids to HF
-// MarianTokenizer. HF encodes with the model's own SentencePiece (no extra
-// BOS/EOS for a single sample), so we use sp.EncodeAsIds directly.
+// Loads tokenizer/source.spm, tokenizer/target.spm and tokenizer/vocab.tsv ("<id>\t<piece>" per line).
+// Any missing file makes the pack INVALID: translating with a partial tokenizer would silently
+// produce garbage, which is worse than reporting the model unavailable.
 bool loadTokenizer(const std::string& dir, PackModel& m) {
-    std::string spPath = dir + "/tokenizer/sentencepiece.model";
-    if (m.sp.Load(spPath).ok()) {
-        m.spReady = true;
-        LOGI("SentencePiece loaded: %s", spPath.c_str());
-        return true;
+    const std::string src = dir + "/tokenizer/source.spm";
+    const std::string tgt = dir + "/tokenizer/target.spm";
+    const std::string voc = dir + "/tokenizer/vocab.tsv";
+    if (!m.srcSp.Load(src).ok()) { LOGE("source.spm load failed: %s", src.c_str()); return false; }
+    if (!m.tgtSp.Load(tgt).ok()) { LOGE("target.spm load failed: %s", tgt.c_str()); return false; }
+    std::ifstream f(voc);
+    if (!f.is_open()) { LOGE("vocab.tsv missing: %s", voc.c_str()); return false; }
+    std::string line;
+    while (std::getline(f, line)) {
+        if (!line.empty() && line.back() == '\r') line.pop_back();  // tolerate CRLF checkouts
+        auto tab = line.find('\t');
+        if (tab == std::string::npos) continue;
+        const int64_t id = atoll(line.substr(0, tab).c_str());
+        if (id < 0 || id > 1000000) continue;
+        if ((size_t)id >= m.id2tok.size()) m.id2tok.resize((size_t)id + 1);
+        std::string tok = line.substr(tab + 1);
+        m.id2tok[(size_t)id] = tok;
+        m.tok2id.emplace(tok, id);
     }
-    LOGE("SentencePiece load failed: %s", spPath.c_str());
-    m.spReady = false;
-    return false;
+    if (m.id2tok.size() < 1000) { LOGE("vocab.tsv too small (%zu)", m.id2tok.size()); return false; }
+    auto unk = m.tok2id.find("<unk>");
+    m.unk_id = unk != m.tok2id.end() ? unk->second : 1;
+    m.spReady = true;
+    LOGI("Marian tokenizer loaded: vocab=%zu unk=%lld eos=%lld", m.id2tok.size(), (long long)m.unk_id, (long long)m.eos_id);
+    return true;
 }
 
-// Marian-exact token ids (HF: EncodeAsIds returns exactly the model's ids).
+// Marian-exact source ids = HF MarianTokenizer: source-spm pieces -> vocab ids (unk when absent),
+// then the end-of-sentence id.
 const int64_t MAX_INPUT_TOKENS = 512;  // encoder practical bound (Phase 6)
 std::vector<int64_t> tokenize(const std::string& text, const PackModel& m) {
     if (!m.spReady) return {};
-    std::vector<int> ids32 = m.sp.EncodeAsIds(text);
-    if ((int64_t)ids32.size() > MAX_INPUT_TOKENS) return {};  // oversize -> caller MT_TOK_FAIL
-    std::vector<int64_t> ids(ids32.begin(), ids32.end());
+    std::vector<std::string> pieces = m.srcSp.EncodeAsPieces(text);
+    if ((int64_t)pieces.size() + 1 > MAX_INPUT_TOKENS) return {};  // oversize -> caller MT_TOK_FAIL
+    std::vector<int64_t> ids;
+    ids.reserve(pieces.size() + 1);
+    for (const auto& p : pieces) {
+        auto it = m.tok2id.find(p);
+        ids.push_back(it != m.tok2id.end() ? it->second : m.unk_id);
+    }
+    ids.push_back(m.eos_id);
     return ids;
+}
+
+// Generated vocab ids -> text: ids -> pieces (skipping specials) -> target-spm detokenization.
+std::string detokenize(const std::vector<int64_t>& generated, const PackModel& m) {
+    std::vector<std::string> pieces;
+    pieces.reserve(generated.size());
+    for (int64_t id : generated) {
+        if (id < 0 || (size_t)id >= m.id2tok.size()) continue;
+        if (id == m.eos_id || id == m.pad_id) continue;
+        pieces.push_back(m.id2tok[(size_t)id]);
+    }
+    return m.tgtSp.DecodePieces(pieces);
 }
 
 // Cached per-pair session: created once, reused until pair changes/release.
@@ -303,8 +346,10 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
 
     // ---- Decoder greedy (bounded) ----
     int64_t t2 = nowNs();
-    const int64_t maxSteps = 64;
-    const int64_t vocabSize = (int64_t)model.sp.GetPieceSize();
+    // Long enough for a sentence, short enough that a runaway model cannot stall the phone: the
+    // decoder has no KV cache, so every extra step re-runs the whole prefix.
+    const int64_t maxSteps = std::min<int64_t>(128, (int64_t)ids.size() * 3 + 16);
+    const int64_t vocabSize = (int64_t)model.id2tok.size();
     std::vector<int64_t> decIds = {model.decoder_start_id};
     std::vector<int64_t> generated;
     bool done = false;
@@ -374,10 +419,7 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
 
     // Decode with the REAL SentencePiece (Marian-exact detokenization).
     std::string out;
-    if (model.spReady) {
-        std::vector<int> gen32(generated.begin(), generated.end());
-        out = model.sp.DecodeIds(gen32);
-    }
+    if (model.spReady) out = detokenize(generated, model);
 
     g_ort->ReleaseMemoryInfo(mem);
 
