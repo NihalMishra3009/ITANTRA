@@ -78,6 +78,53 @@ Translation happens **sender-side, before encryption** — the wire carries only
 final target-language compact text. Relay nodes never require a translation (or
 speech) model. SOS/emergency traffic never passes through translation.
 
+## Offline Spell-Check Word Lists (English, Hindi, Marathi)
+
+| Dictionary | Language | License | Source | Notes |
+|------------|----------|---------|--------|-------|
+| `hi_IN` | Hindi | GPL-2.0 (`hi_IN/COPYING`) | `LibreOffice/dictionaries` @ commit `32b006a2c22a4ac7e8ed3f03346f7b3d85a970a4` | `hi_IN/hi_IN.dic` + `hi_IN/hi_IN.aff` |
+| `mr_IN` | Marathi | GPL-2.0 (`mr_IN/COPYING`) | same repo/commit | `mr_IN/mr_IN.dic` + `mr_IN/mr_IN.aff` |
+| `en_US` | English | GPL-2.0 (`en/license.txt`) | same repo/commit | `en/en_US.dic` + `en/en_US.aff` |
+
+These are Hunspell dictionaries: a small set of root words plus affix (prefix/suffix) rules.
+Hindi and Marathi are morphologically rich — case suffixes and postpositions are glued onto
+the stem, sometimes via two CHAINED suffix applications (see the script's
+`_expand_suffix_chain` for a worked example: Marathi "घर" house → "घरा" → "घरात" in-the-house) —
+so a flat list of dictionary-form roots would falsely flag ordinary, correctly spelled
+inflected words as typos. `model-conversion/build_spellcheck_wordlist.py` expands every root
+into all of its valid surface forms using the dictionary's own affix rules (via
+[spylls](https://github.com/zverok/spylls), a pure-Python Hunspell reimplementation, MPL-2.0,
+**build-time only — never bundled into the app**), validates every candidate against spylls'
+own Hunspell-accurate `lookup()`, and writes one binary **Bloom filter** per language to
+`app/src/main/assets/spellcheck/{en,hi,mr}.bloom` (~1% target false-positive rate). A flat
+`HashSet<String>` was tried first: Marathi alone expands to ~2.9 million surface forms, which
+came out to an 8.7 MiB gzip-compressed asset (over this project's ~5 MiB low-end-device budget)
+and would cost many tens of MB of live heap as Kotlin String objects. A Bloom filter fixes both:
+~1.2 bytes/word (Marathi ≈ 3.3 MiB, English/Hindi smaller still), and it can only ever answer
+"definitely not present" (correctly flags a typo) or "probably present" (a small, tunable
+false-positive rate — an occasional missed typo, an acceptable failure mode) — it structurally
+cannot say "not present" for a word that IS in the set, so it can never cause the one
+unacceptable failure mode, flagging a real word as misspelled. `com.itantra.stt
+.SpellCheckEngine` loads these lazily at runtime (its internal `BloomFilter` reader must stay
+bit-for-bit identical to the Python writer's FNV-1a/FNV-1 double-hashing scheme — see both
+files' doc comments) — flagging only, never suggestions or auto-correction, and it is a silent
+no-op for the seven languages with no shipped filter.
+
+As with eSpeak NG (GPL-3.0-or-later, statically linked — see "Bundled Assets" above), this adds
+GPL-2.0-licensed *data* (not code) to an APK that is already a GPL combined work, so this
+introduces no new licensing conflict.
+
+Rebuild with:
+
+```bash
+pip install spylls==0.1.7
+python model-conversion/build_spellcheck_wordlist.py
+```
+
+The script pins the source commit and verifies each downloaded `.dic`/`.aff` file's SHA-256
+before use, and refuses to write a word list whose root-to-surface-form expansion ratio looks
+degenerate (a sign the affix rules did not actually run).
+
 ## Candidate Models (declared in catalog, NOT runtime assets)
 
 These are registered in `ModelCatalog` as future candidates. Their `downloadUrl` is `null`

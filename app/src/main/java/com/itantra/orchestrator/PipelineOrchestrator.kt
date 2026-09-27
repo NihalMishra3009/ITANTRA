@@ -12,8 +12,10 @@ import com.itantra.protocol.PacketType
 import com.itantra.protocol.TextPacket
 import com.itantra.security.MessageSecurityManager
 import com.itantra.security.PeerSessionManager
+import com.itantra.stt.SpellCheckEngine
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
+import com.itantra.stt.UtteranceQuality
 import com.itantra.transport.CompositeTransport
 import com.itantra.transport.ConnectionState
 import com.itantra.transport.MeshRoutingManager
@@ -96,6 +98,15 @@ class PipelineOrchestrator(
 
     private val _lastReceivedText = MutableStateFlow("")
     val lastReceivedText: StateFlow<String> = _lastReceivedText.asStateFlow()
+
+    /**
+     * Informational only: tokens SpellCheckEngine did not recognize in the most recently sent
+     * utterance. Empty whenever the source language has no shipped word list (see
+     * SpellCheckEngine.SUPPORTED_LANGUAGES), for an emergency/SOS send, or when nothing was
+     * flagged. Never affects whether a message is sent.
+     */
+    private val _lastSpellCheckFlags = MutableStateFlow<List<String>>(emptyList())
+    val lastSpellCheckFlags: StateFlow<List<String>> = _lastSpellCheckFlags.asStateFlow()
 
     private val _lastLatencyMetrics = MutableStateFlow<LatencyRecord?>(null)
     val lastLatencyMetrics: StateFlow<LatencyRecord?> = _lastLatencyMetrics.asStateFlow()
@@ -539,6 +550,27 @@ class PipelineOrchestrator(
             if (normalizedText.isBlank()) {
                 _transceiverState.value = TransceiverState.IDLE
                 return@launch
+            }
+
+            // Reject decode failures (degenerate word-repeat runs) before they're sent. Never
+            // applied to emergency traffic — a heuristic must not be able to swallow an SOS.
+            if (!isAlertNext && UtteranceQuality.isGarbage(normalizedText)) {
+                Log.w(TAG, "Discarding likely-garbled transcript: \"$normalizedText\"")
+                _transceiverState.value = TransceiverState.IDLE
+                return@launch
+            }
+
+            // Informational only — flags possibly-misspelled words for future UI surfacing.
+            // Never blocks or alters the send, and — like the garbage-utterance check above —
+            // never runs on emergency/SOS traffic, so a heuristic can never delay an SOS.
+            if (!isAlertNext) {
+                val flagged = SpellCheckEngine.check(context, normalizedText, sourceLanguage.code)
+                _lastSpellCheckFlags.value = flagged
+                if (flagged.isNotEmpty()) {
+                    Log.i(TAG, "Possible misspelling(s) in \"$normalizedText\": $flagged")
+                }
+            } else {
+                _lastSpellCheckFlags.value = emptyList()
             }
 
             // NEVER translate on the sender: every phone has ONE preference — the language its

@@ -126,7 +126,7 @@ class SttEngine(
                 val normalizedText = IndicTextNormalizer.normalize(rawText, targetLang.code)
                 val duration = System.currentTimeMillis() - startTime
                 Log.i(TAG, "Whisper [${targetLang.code}] ${duration}ms: \"$normalizedText\"")
-                SttResult(normalizedText, targetLang.code, duration, 0.9f)
+                SttResult(normalizedText, targetLang.code, duration, UtteranceQuality.heuristicConfidence(normalizedText, duration))
             } finally {
                 stream.release()
             }

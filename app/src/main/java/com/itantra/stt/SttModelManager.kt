@@ -31,5 +31,5 @@ data class SttResult(
     val text: String,
     val languageCode: String,
     val durationMs: Long,
-    val confidence: Float = 0.95f
+    val confidence: Float = 0f
 )
