@@ -225,9 +225,18 @@ class OpusMtTranslationEngine(
         val enc = File(modelDir, "encoder_model.onnx").exists()
         val dec = File(modelDir, "decoder_model.onnx").exists()
         val cfg = File(modelDir, "config.json").exists()
-        if (!enc || !dec || !cfg) return false
-        if (!ensureTokenizerFiles(modelDir, modelKey(sourceLanguage, targetLanguage))) return false
-        if (!ensureNativeLoaded()) return false
+        if (!enc || !dec || !cfg) {
+            Log.w(TAG, "Staged smoke test: missing files at $modelDir (enc=$enc dec=$dec cfg=$cfg)")
+            return false
+        }
+        if (!ensureTokenizerFiles(modelDir, modelKey(sourceLanguage, targetLanguage))) {
+            Log.w(TAG, "Staged smoke test: tokenizer files unavailable for $modelDir")
+            return false
+        }
+        if (!ensureNativeLoaded()) {
+            Log.w(TAG, "Staged smoke test: native MT adapter unavailable (nativeLoaded=$nativeLoaded loadAttempted=$loadAttempted)")
+            return false
+        }
         val sentence = if (sourceLanguage.lowercase() == "hi") SMOKE_SENTENCE else SMOKE_SENTENCE_ALT
         return try {
             val native = parseNativeRaw(nnTranslate(modelDir.absolutePath, sentence))

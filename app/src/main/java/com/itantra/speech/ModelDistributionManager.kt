@@ -68,7 +68,14 @@ class ModelDistributionManager(
             var i = 0
             while (i < reqFiles.length() && ok) {
                 val rel = reqFiles.getString(i)
-                val f = File(dir, rel)
+                // The manifest baked into hosted archives predates extractArchiveInto's
+                // flattening (.onnx/config.json land at the pack ROOT, only tokenizer/
+                // keeps its subdirectory — see the destRel mapping there) — a literal
+                // "models/encoder_model.onnx" entry never exists post-extraction. Resolve
+                // against the SAME flattened layout extraction actually produces, so this
+                // check reflects reality instead of the manifest's stale nested paths.
+                val flattenedRel = translationManifestPathToFlattened(rel)
+                val f = File(dir, flattenedRel)
                 if (!f.exists()) {
                     ok = false
                 } else if (hashes != null && hashes.has(rel)) {
@@ -82,6 +89,25 @@ class ModelDistributionManager(
         }
         // Legacy pack (no manifest): enforce the same runtime contract.
         return com.itantra.speech.ModelStorageManager.isCompleteTranslationPackFiles(dir)
+    }
+
+    /**
+     * Mirrors extractArchiveInto's destRel mapping for ModelRole.TRANSLATION exactly: a
+     * manifest.json required_files entry may still carry a stale nested path (e.g.
+     * "models/encoder_model.onnx") from before extraction started flattening .onnx/
+     * config.json/manifest.json to the pack root; only tokenizer/ entries keep their
+     * subdirectory. Both places must agree on where a file actually lands, or validation
+     * checks a path extraction never writes to.
+     */
+    private fun translationManifestPathToFlattened(rel: String): String {
+        val base = rel.substringAfterLast('/')
+        return when {
+            base.endsWith(".onnx") -> base
+            base.equals("config.json", true) -> base
+            base.equals("manifest.json", true) -> base
+            rel.contains("tokenizer/") -> rel.substring(rel.indexOf("tokenizer/"))
+            else -> rel
+        }
     }
 
     /** Current pack statuses (live, driven by storage + in-progress downloads). */

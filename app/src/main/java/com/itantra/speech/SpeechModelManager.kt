@@ -35,7 +35,7 @@ class SpeechModelManager(
     private val sttEngine: SttEngine? = null,
     private val ttsEngine: TtsEngine? = null,
     private val vadEngine: VadEngine? = null,
-    translationEngine: com.itantra.translation.TranslationEngine? = null
+    translationEngineOverride: com.itantra.translation.TranslationEngine? = null
 ) {
     companion object {
         private const val TAG = "SpeechModelManager"
@@ -51,8 +51,8 @@ class SpeechModelManager(
     private val appContext = context.applicationContext
 
     /** Offline neural translation engine (Opus-MT via ONNX Runtime) — null-safe. */
-    val translationEngine: com.itantra.translation.TranslationEngine? =
-        translationEngine ?: com.itantra.translation.OpusMtTranslationEngine(appContext)
+    val translationEngine: com.itantra.translation.TranslationEngine =
+        translationEngineOverride ?: com.itantra.translation.OpusMtTranslationEngine(appContext)
 
     /** Wire catalog asset checks to the app's asset files (honest availability). */
     private val unbinding = ModelCatalog.bindAssetAccess(
@@ -116,7 +116,7 @@ class SpeechModelManager(
     ): com.itantra.translation.TranslationResult {
         val engine = translationEngine
         val route = hopRoute(sourceCode, targetCode)
-        if (engine == null || route == null) {
+        if (route == null) {
             return com.itantra.translation.TranslationResult.unavailable(sourceCode, targetCode)
         }
         if (text.isBlank()) {
