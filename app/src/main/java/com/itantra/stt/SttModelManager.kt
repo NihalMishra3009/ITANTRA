@@ -31,5 +31,14 @@ data class SttResult(
     val text: String,
     val languageCode: String,
     val durationMs: Long,
-    val confidence: Float = 0f
+    val confidence: Float = 0f,
+    /**
+     * The language the audio was actually acoustically detected as, via sherpa-onnx's
+     * Whisper-based SpokenLanguageIdentification — independent of [languageCode], which is
+     * merely what the sender's UI was set to (and what Whisper was forced to decode as).
+     * Falls back to [languageCode] when detection is unavailable or inconclusive, so callers
+     * that only care about "the real spoken language" can always trust this field, and callers
+     * that specifically want "what Whisper was asked to decode" keep using [languageCode].
+     */
+    val detectedLanguageCode: String = languageCode
 )

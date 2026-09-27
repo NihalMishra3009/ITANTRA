@@ -28,6 +28,9 @@ import com.k2fsa.sherpa.onnx.OfflineTransducerModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWenetCtcModelConfig
 import com.k2fsa.sherpa.onnx.OfflineWhisperModelConfig
 import com.k2fsa.sherpa.onnx.OfflineZipformerCtcModelConfig
+import com.k2fsa.sherpa.onnx.SpokenLanguageIdentification
+import com.k2fsa.sherpa.onnx.SpokenLanguageIdentificationConfig
+import com.k2fsa.sherpa.onnx.SpokenLanguageIdentificationWhisperConfig
 import java.io.File
 import java.io.FileOutputStream
 
@@ -73,6 +76,22 @@ class SttEngine(
     private var appliedLanguage: String? = null
     private var isInitialized = false
     private var hasRealModel = false
+
+    /**
+     * Separate Whisper-based spoken-language-identification model (sherpa-onnx's
+     * SpokenLanguageIdentification). Unlike [recognizer], it is never forced to a language —
+     * it exists purely to answer "what language was actually spoken", so a packet can be
+     * tagged with the truth instead of the sender's self-declared UI preference (the bug this
+     * exists to fix: sender set to Hindi, speaks English, receiver — also set to Hindi — never
+     * translates because both sides only ever compared self-declared preferences).
+     *
+     * Decode itself STAYS forced to the sender's selection (see [applyLanguage]) — forcing is a
+     * real accuracy assist for short Indic-language utterances, and this repo has already hit a
+     * hard app-killing crash (see [WHISPER_UNSUPPORTED]) from mishandling Whisper's `language`
+     * config field, so this deliberately does not touch that field or attempt an "auto" sentinel
+     * for it. Detection runs as a wholly separate, independent pass instead.
+     */
+    private var langId: SpokenLanguageIdentification? = null
 
     @Synchronized
     override fun initialize(languageCode: String): Boolean {
@@ -125,8 +144,18 @@ class SttEngine(
                 val rawText = result.text.trim()
                 val normalizedText = IndicTextNormalizer.normalize(rawText, targetLang.code)
                 val duration = System.currentTimeMillis() - startTime
-                Log.i(TAG, "Whisper [${targetLang.code}] ${duration}ms: \"$normalizedText\"")
-                SttResult(normalizedText, targetLang.code, duration, UtteranceQuality.heuristicConfidence(normalizedText, duration))
+                val detectedLanguageCode = detectSpokenLanguage(audioChunk) ?: targetLang.code
+                Log.i(
+                    TAG,
+                    "Whisper [forced=${targetLang.code}, detected=$detectedLanguageCode] ${duration}ms: \"$normalizedText\""
+                )
+                SttResult(
+                    text = normalizedText,
+                    languageCode = targetLang.code,
+                    durationMs = duration,
+                    confidence = UtteranceQuality.heuristicConfidence(normalizedText, duration),
+                    detectedLanguageCode = detectedLanguageCode
+                )
             } finally {
                 stream.release()
             }
@@ -194,6 +223,36 @@ class SttEngine(
             Log.i(TAG, "Whisper language switched to ${lang.code}")
         } catch (e: Throwable) {
             Log.e(TAG, "Whisper language switch failed for ${lang.code}", e)
+        }
+    }
+
+    /**
+     * Runs the audio through the separate, never-forced spoken-language-identification model
+     * and returns the ISO code it detected — but ONLY when that code maps to one of iTantra's
+     * supported languages AND is safe to hand back to Whisper elsewhere (i.e. not "or"; see
+     * [WHISPER_UNSUPPORTED]). Any failure, unknown/unmapped code, or missing model returns
+     * null, and callers fall back to the forced (sender-selected) language — the previous,
+     * known-safe behavior. This function must never throw past its own try/catch: LID is a
+     * best-effort signal, not something that may destabilize transcription.
+     */
+    private fun detectSpokenLanguage(audioChunk: FloatArray): String? {
+        val lid = langId ?: return null
+        return try {
+            val stream = lid.createStream()
+            val rawCode = try {
+                stream.acceptWaveform(audioChunk, SAMPLING_RATE)
+                lid.compute(stream)
+            } finally {
+                stream.release()
+            }
+            val normalized = rawCode?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+            val mapped = SupportedLanguage.values().firstOrNull { it.code.equals(normalized, ignoreCase = true) }
+                ?: return null
+            if (!whisperSupports(mapped.code)) return null
+            mapped.code
+        } catch (e: Throwable) {
+            Log.w(TAG, "Spoken-language identification failed; falling back to forced language", e)
+            null
         }
     }
 
@@ -278,6 +337,7 @@ class SttEngine(
             activeConfig = config
             appliedLanguage = safeWhisperLanguage(lang.code)
             hasRealModel = true
+            buildLanguageIdentifier(encoderPath, decoderPath)
             // parentFile is null for a bare filename; this is a log-label only and must
             // never be able to throw, or the catch below would discard a recognizer that
             // has already loaded successfully.
@@ -295,9 +355,41 @@ class SttEngine(
         }
     }
 
+    /**
+     * Builds the standalone spoken-language-identification model from the SAME encoder/decoder
+     * files already loaded for [recognizer] — no extra download, just a second in-memory ONNX
+     * session (roughly doubling Whisper's resident memory). Failure here is non-fatal: it only
+     * disables the mismatch-detection signal, never the transcription path itself.
+     */
+    private fun buildLanguageIdentifier(encoderPath: String, decoderPath: String) {
+        try {
+            langId?.release()
+            val config = SpokenLanguageIdentificationConfig(
+                whisper = SpokenLanguageIdentificationWhisperConfig(
+                    encoder = encoderPath,
+                    decoder = decoderPath,
+                    tailPaddings = -1
+                ),
+                numThreads = 2,
+                debug = false,
+                provider = "cpu"
+            )
+            langId = SpokenLanguageIdentification(assetManager = null, config = config)
+            Log.i(TAG, "Spoken-language identification model ready")
+        } catch (e: Throwable) {
+            Log.w(TAG, "Spoken-language identification unavailable; detection disabled", e)
+            langId = null
+        }
+    }
+
     override fun release() {
         try {
             recognizer?.release()
+        } catch (e: Exception) {
+            // ignore
+        }
+        try {
+            langId?.release()
         } catch (e: Exception) {
             // ignore
         } finally {
@@ -306,6 +398,7 @@ class SttEngine(
             appliedLanguage = null
             hasRealModel = false
             isInitialized = false
+            langId = null
         }
     }
 

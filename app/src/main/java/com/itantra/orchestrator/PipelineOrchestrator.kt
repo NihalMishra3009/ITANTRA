@@ -108,6 +108,19 @@ class PipelineOrchestrator(
     private val _lastSpellCheckFlags = MutableStateFlow<List<String>>(emptyList())
     val lastSpellCheckFlags: StateFlow<List<String>> = _lastSpellCheckFlags.asStateFlow()
 
+    /**
+     * One-shot: set whenever a sent utterance's detected spoken language didn't match
+     * [currentLanguage], right after currentLanguage has been auto-switched to match it. The
+     * UI should show this once (e.g. a toast) and clear it — see MainActivity's collector.
+     */
+    private val _languageMismatchNotice = MutableStateFlow<String?>(null)
+    val languageMismatchNotice: StateFlow<String?> = _languageMismatchNotice.asStateFlow()
+
+    /** Clears the notice after the UI has shown it, so it never re-fires on rotation/resume. */
+    fun consumeLanguageMismatchNotice() {
+        _languageMismatchNotice.value = null
+    }
+
     private val _lastLatencyMetrics = MutableStateFlow<LatencyRecord?>(null)
     val lastLatencyMetrics: StateFlow<LatencyRecord?> = _lastLatencyMetrics.asStateFlow()
 
@@ -560,11 +573,33 @@ class PipelineOrchestrator(
                 return@launch
             }
 
+            // What was ACTUALLY spoken, per sherpa-onnx's Whisper-based language identification
+            // — independent of [sourceLanguage], which is only the sender's UI preference (and
+            // what Whisper was forced to decode as, for accuracy). Falls back to sourceLanguage
+            // when detection is unavailable, so this is always safe to use as "the real language".
+            val actualSpokenLanguage = SupportedLanguage.fromCode(sttResult.detectedLanguageCode)
+            if (!actualSpokenLanguage.code.equals(sourceLanguage.code, ignoreCase = true)) {
+                val fromLang = sourceLanguage
+                Log.w(
+                    TAG,
+                    "Sender's UI language (${fromLang.code}) does not match the detected " +
+                        "spoken language (${actualSpokenLanguage.code}) — switching MY LANGUAGE to " +
+                        "match what was actually said."
+                )
+                // The UI selector should reflect what the user actually just spoke, not a stale
+                // preference — setting currentLanguage also reloads STT/TTS for the new language.
+                currentLanguage = actualSpokenLanguage
+                _languageMismatchNotice.value =
+                    "Detected ${actualSpokenLanguage.displayName} — switched from ${fromLang.displayName}"
+            }
+
             // Informational only — flags possibly-misspelled words for future UI surfacing.
             // Never blocks or alters the send, and — like the garbage-utterance check above —
             // never runs on emergency/SOS traffic, so a heuristic can never delay an SOS.
+            // Spellchecked against the ACTUAL spoken language — checking English text against a
+            // Hindi dictionary (or vice versa) would flag everything as misspelled.
             if (!isAlertNext) {
-                val flagged = SpellCheckEngine.check(context, normalizedText, sourceLanguage.code)
+                val flagged = SpellCheckEngine.check(context, normalizedText, actualSpokenLanguage.code)
                 _lastSpellCheckFlags.value = flagged
                 if (flagged.isNotEmpty()) {
                     Log.i(TAG, "Possible misspelling(s) in \"$normalizedText\": $flagged")
@@ -580,8 +615,13 @@ class PipelineOrchestrator(
             // is what lets one broadcast reach phones with different preferences, and it is the
             // ONLY translation path: a sender-side "target language" concept does not exist here
             // (the UI has no such control — see MainActivity, single "my language" selector).
+            //
+            // The packet is tagged with the DETECTED spoken language, not the sender's raw UI
+            // preference — this is the fix for the bug where a sender set to Hindi but speaking
+            // English produced a packet tagged "hi", so a Hindi-set receiver's ReceiverLanguagePolicy
+            // saw matching languages and never translated the (actually English) text.
             val packetText = normalizedText
-            val packetLanguage = sourceLanguage.code
+            val packetLanguage = actualSpokenLanguage.code
 
             val packet = buildPacket(
                 text = packetText,

@@ -557,6 +557,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // currentLanguage was just auto-switched to match what was actually spoken (see
+        // PipelineOrchestrator.finalizeUtteranceAndSend) — reflect it in the MY LANGUAGE
+        // selector and tell the user once why it moved.
+        lifecycleScope.launch {
+            orchestrator.languageMismatchNotice.collectLatest { notice ->
+                if (notice != null) {
+                    runOnUiThread {
+                        Toast.makeText(this@MainActivity, notice, Toast.LENGTH_LONG).show()
+                        rebuildLanguageDropdown()
+                    }
+                    orchestrator.consumeLanguageMismatchNotice()
+                }
+            }
+        }
+
         binding.perfChip.setOnClickListener {
             val expanded = binding.tvLatencyMetrics.visibility == View.GONE
             binding.tvLatencyMetrics.visibility = if (expanded) View.VISIBLE else View.GONE
