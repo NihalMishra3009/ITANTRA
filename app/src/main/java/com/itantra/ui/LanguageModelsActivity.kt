@@ -84,8 +84,25 @@ class LanguageModelsActivity : AppCompatActivity() {
         renderStorage()
     }
 
-    /** Offline translation pairs (Opus-MT hi↔en): honest install state, no fake download. */
+    /**
+     * Offline translation: ONE action for the user's own language, not a per-pair list.
+     * The user only ever picks their own language (on the home screen "MY LANGUAGE"
+     * selector) — translation itself is entirely automatic and receiver-side (see
+     * PipelineOrchestrator.currentLanguage). So here we download every pack THAT language
+     * needs (as pivot source or final target) in one click, instead of listing individual
+     * directed pairs for the user to reason about.
+     */
     private fun translationPairsSection(): LinearLayout {
+        val myLang = (application as com.itantra.iTantraApp).orchestrator?.currentLanguage
+            ?: com.itantra.stt.SupportedLanguage.HINDI
+        val relevant = com.itantra.speech.ModelCatalog.translationPacksFor(myLang)
+        val hosted = relevant.filter { it.downloadUrl != null }
+        val notInstalled = hosted.filter {
+            val s = smm.distributionManager().status(it)
+            s != PackStatus.INSTALLED && s != PackStatus.LOADED
+        }
+        val installed = hosted - notInstalled.toSet()
+
         val section = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = getDrawableCompat(R.drawable.bg_card)
@@ -96,62 +113,93 @@ class LanguageModelsActivity : AppCompatActivity() {
             setPadding(dp(14), dp(14), dp(14), dp(12))
         }
         section.addView(TextView(this).apply {
-            text = "OFFLINE TRANSLATION PAIRS"
+            text = "OFFLINE TRANSLATION — ${myLang.nativeName.uppercase(Locale.US)}"
             setTextColor(getColor(R.color.text_white))
             textSize = 13f
             setTypeface(typeface, android.graphics.Typeface.BOLD)
         })
         section.addView(TextView(this).apply {
-            text = "Helsinki-NLP Opus-MT (ONNX, Apache-2.0) — fully offline after install."
+            text = "Helsinki-NLP Opus-MT (ONNX, Apache-2.0) — fully offline after install. " +
+                "Downloads everything needed to translate for your language; change language on the home screen."
             setTextColor(getColor(R.color.text_muted))
             textSize = 11f
             setPadding(0, 2, 0, 0)
         })
 
-        for (pack in com.itantra.speech.ModelCatalog.translationPacks()) {
-            val status = smm.distributionManager().status(pack)
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, dp(6), 0, 0)
-            }
-            val labels = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-            labels.addView(TextView(this).apply {
-                text = "${pack.language.nativeName} → ${pack.targetLanguage?.displayName ?: "?"}"
-                setTextColor(getColor(R.color.text_white))
-                textSize = 13f
-            })
-            val progress = TextView(this).apply {
-                setTextColor(getColor(R.color.comm_amber))
-                textSize = 10f
-            }
-            // Persistent status line: downloading %, verifying, corrupted, failed, not hosted.
-            // GONE once fully installed (green action button is self-evident).
-            progress.text = translationStatusLabel(status)
-            progress.visibility =
-                if (status == PackStatus.INSTALLED || status == PackStatus.LOADED) View.GONE else View.VISIBLE
-            labels.addView(progress)
-            row.addView(labels)
-
-            val action = when {
-                status == PackStatus.INSTALLED || status == PackStatus.LOADED ->
-                    smallButton("Delete", R.color.comm_red) {
-                        smm.distributionManager().deletePack(pack)
-                        render()
-                    }
-                pack.downloadUrl != null ->
-                    smallButton("Download", R.color.comm_green) {
-                        startDownload(pack, progress)
-                    }
-                else -> smallButton("Not hosted", R.color.text_faint) { /* no-op */ }
-            }
-            row.addView(action)
-            section.addView(row)
+        val progress = TextView(this).apply {
+            visibility = View.GONE
+            setTextColor(getColor(R.color.comm_amber))
+            textSize = 12f
+            setPadding(0, dp(8), 0, 0)
         }
+
+        val summary = TextView(this).apply {
+            setTextColor(getColor(R.color.text_muted))
+            textSize = 12f
+            setPadding(0, dp(10), 0, 0)
+            text = when {
+                hosted.isEmpty() -> "No offline translation hosted for ${myLang.displayName} yet."
+                notInstalled.isEmpty() -> "✓ All ${installed.size} translation pack(s) for ${myLang.displayName} installed."
+                else -> {
+                    val mb = notInstalled.sumOf { it.sizeBytes } / (1024.0 * 1024.0)
+                    "${notInstalled.size} pack(s) needed, ${installed.size} already installed — " +
+                        String.format(Locale.US, "%.0f MB total", mb)
+                }
+            }
+        }
+        section.addView(summary)
+        section.addView(progress)
+
+        val bottom = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        val action = when {
+            notInstalled.isNotEmpty() -> smallButton("Download for ${myLang.displayName}", R.color.comm_green) {
+                downloadAllSequential(notInstalled, progress, summary, myLang)
+            }
+            installed.isNotEmpty() -> smallButton("Remove all", R.color.comm_red) {
+                installed.forEach { smm.distributionManager().deletePack(it) }
+                render()
+            }
+            else -> null
+        }
+        action?.let { bottom.addView(it) }
+        if (bottom.childCount > 0) section.addView(bottom)
+
         return section
+    }
+
+    /** Downloads several packs one after another, reporting ONE combined progress bar. */
+    private fun downloadAllSequential(
+        packs: List<LanguageModelPack>,
+        progress: TextView,
+        summary: TextView,
+        myLang: com.itantra.stt.SupportedLanguage
+    ) {
+        progress.visibility = View.VISIBLE
+        var index = 0
+        fun next() {
+            if (index >= packs.size) {
+                progress.visibility = View.GONE
+                render()
+                return
+            }
+            val pack = packs[index]
+            summary.text = "Downloading ${index + 1}/${packs.size} for ${myLang.displayName}…"
+            smm.installLanguagePack(
+                pack,
+                onProgress = { f -> runOnUiThread {
+                    progress.text = "${pack.language.nativeName}→${pack.targetLanguage?.displayName ?: "?"}: ${(f * 100).toInt()}%"
+                } },
+                onDone = { _ -> runOnUiThread {
+                    index++
+                    next()
+                } }
+            )
+        }
+        next()
     }
 
     private fun engineVisible(): Boolean = when (activeTab) {
@@ -162,19 +210,6 @@ class LanguageModelsActivity : AppCompatActivity() {
         Tab.AVAILABLE -> smm.enginePacks().any { p -> p.downloadUrl != null &&
             smm.distributionManager().status(p) == PackStatus.NOT_INSTALLED }
         Tab.ALL -> true
-    }
-
-    private fun translationStatusLabel(status: PackStatus): String = when (status) {
-        PackStatus.NOT_INSTALLED -> "Not installed"
-        PackStatus.DOWNLOADING -> "Downloading…"
-        PackStatus.VERIFYING -> "Verifying SHA-256…"
-        PackStatus.SMOKE_TESTING -> "Smoke-testing model…"
-        PackStatus.LOADING -> "Loading…"
-        PackStatus.FAILED -> "Download failed — retry from device network"
-        PackStatus.CORRUPTED -> "SHA-256 check failed — redownload"
-        PackStatus.INSTALLED -> "Installed"
-        PackStatus.LOADED -> "Installed & ready"
-        else -> ""
     }
 
     /** Languages grouped by code — hi/en first, then alphabetical. */

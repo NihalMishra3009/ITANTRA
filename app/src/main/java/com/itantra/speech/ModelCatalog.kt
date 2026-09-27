@@ -449,6 +449,17 @@ object ModelCatalog {
     /** Translation pack for a specific directed pair, or null. */
     fun translationPack(source: SupportedLanguage, target: SupportedLanguage): LanguageModelPack? =
         translationPacks().firstOrNull { it.language == source && it.targetLanguage == target }
+
+    /**
+     * Every hosted translation pack that involves this language, either as the pivot source
+     * or the final target. This is the set a phone needs installed so that, once it is the
+     * receiver, any sender who reaches EN can be translated the rest of the way into this
+     * language (see ReceiverLanguagePolicy / PipelineOrchestrator.currentLanguage doc comments
+     * for why translation is receiver-side only). Used to offer ONE "download my language"
+     * action instead of a long per-pair list — the user picks a language, not individual pairs.
+     */
+    fun translationPacksFor(lang: SupportedLanguage): List<LanguageModelPack> =
+        translationPacks().filter { it.language == lang || it.targetLanguage == lang }
 }
 
 /** Model packs for the offline translation role (existing API surface). */
