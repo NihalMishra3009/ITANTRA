@@ -22,11 +22,9 @@ class TranslationStorageContractTest {
             write(dir, "decoder_model.onnx", ByteArray(8))
             assertFalse("config missing", ModelStorageManager.isCompleteTranslationPackFiles(dir))
             write(dir, "config.json", "{}".toByteArray())
-            assertFalse("spm missing", ModelStorageManager.isCompleteTranslationPackFiles(dir))
-            File(dir, "tokenizer").mkdirs()
-            write(File(dir, "tokenizer"), "sentencepiece.model", ByteArray(4))
-            assertFalse("sp.vocab missing", ModelStorageManager.isCompleteTranslationPackFiles(dir))
-            write(File(dir, "tokenizer"), "sp.vocab", "0\t<unk>\n".toByteArray())
+            // Tokenizer files are bundled in the APK and copied in lazily on first
+            // load (OpusMtTranslationEngine.ensureTokenizerFiles) — NOT part of the
+            // downloaded artifact's completeness contract. See ModelStorageManager.
             assertTrue(ModelStorageManager.isCompleteTranslationPackFiles(dir))
         } finally {
             dir.deleteRecursively()
@@ -44,9 +42,6 @@ class TranslationStorageContractTest {
             write(File(dir, "models"), "encoder_model.onnx", ByteArray(8))
             write(File(dir, "models"), "decoder_model.onnx", ByteArray(8))
             write(dir, "config.json", "{}".toByteArray())
-            File(dir, "tokenizer").mkdirs()
-            write(File(dir, "tokenizer"), "sentencepiece.model", ByteArray(4))
-            write(File(dir, "tokenizer"), "sp.vocab", "0\t<unk>\n".toByteArray())
             assertFalse("unflattened host layout is not an installed device pack",
                 ModelStorageManager.isCompleteTranslationPackFiles(dir))
         } finally {

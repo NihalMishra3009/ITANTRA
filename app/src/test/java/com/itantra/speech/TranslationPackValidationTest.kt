@@ -8,7 +8,7 @@ import java.io.File
 class TranslationPackValidationTest {
 
     @Test
-    fun testTranslationPackRequiresEncoderDecoderConfigSpm() {
+    fun testTranslationPackRequiresEncoderDecoderConfig() {
         val dir = tempDir()
         try {
             // Empty / partial dirs are NOT installed.
@@ -18,10 +18,9 @@ class TranslationPackValidationTest {
             write(dir, "decoder_model.onnx")
             assertFalse(isComplete(dir))
             write(dir, "config.json")
-            assertFalse(isComplete(dir))
-            // tokenizer/sentencepiece.model required too.
-            File(dir, "tokenizer").mkdirs()
-            write(File(dir, "tokenizer"), "sentencepiece.model")
+            // Tokenizer files (source.spm/target.spm/vocab.tsv) are bundled in the
+            // APK per pair and copied in lazily on first load — NOT part of the
+            // downloaded artifact's completeness contract.
             assertTrue(isComplete(dir))
         } finally {
             dir.deleteRecursively()
@@ -32,8 +31,7 @@ class TranslationPackValidationTest {
         val hasEnc = File(dir, "encoder_model.onnx").exists()
         val hasDec = File(dir, "decoder_model.onnx").exists()
         val hasCfg = File(dir, "config.json").exists()
-        val hasTok = File(File(dir, "tokenizer"), "sentencepiece.model").exists()
-        return hasEnc && hasDec && hasCfg && hasTok
+        return hasEnc && hasDec && hasCfg
     }
 
     private fun tempDir(): File {

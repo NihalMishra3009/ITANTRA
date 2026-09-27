@@ -72,7 +72,7 @@ match the value pinned in `ModelCatalog.realVoices`.
 
 | Model | Pair | License | Runtime | Notes |
 |-------|------|---------|---------|-------|
-| Helsinki-NLP Opus-MT | hi ↔ en | **Apache-2.0** (open-source approved) | ONNX Runtime (bundled libonnxruntime.so) | Converted via model-conversion/convert_opus_mt_onnx.py → encoder_model.onnx + decoder_model.onnx + config.json + manifest.json + tokenizer/ under models/translation/hi-en/ and en-hi/. Hosted with pinned downloadUrl + SHA-256 (release `mt-onnx`). |
+| Helsinki-NLP Opus-MT | hi ↔ en, en → mr | **Apache-2.0** (open-source approved) | ONNX Runtime (bundled libonnxruntime.so), INT8-quantized | Converted via model-conversion/convert_opus_mt_onnx.py → encoder_model.onnx + decoder_model.onnx + config.json + manifest.json + tokenizer/{source.spm,target.spm,vocab.tsv} under models/translation/{hi-en,en-hi,en-mr}/. Hosted with pinned downloadUrl + SHA-256 (release `mt-onnx`). mr→en was converted but is **not hosted** — its own greedy decode occasionally reproduces unrelated training-corpus text on longer sentences; see docs/CURRENT_STATUS.md section N. |
 
 Translation happens **sender-side, before encryption** — the wire carries only the
 final target-language compact text. Relay nodes never require a translation (or

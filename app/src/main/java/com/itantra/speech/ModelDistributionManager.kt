@@ -420,7 +420,10 @@ class ModelDistributionManager(
                 if (packRole == ModelRole.TRANSLATION) {
                     // Engine contract per pack dir:
                     //   encoder_model.onnx, decoder_model.onnx, config.json  (root)
-                    //   tokenizer/sentencepiece.model, tokenizer/sp.vocab   (tokenizer/)
+                    //   tokenizer/source.spm, tokenizer/target.spm, tokenizer/vocab.tsv
+                    //     (tokenizer/; older hosted archives predate these — the engine
+                    //     copies the APK-bundled files in on first load, see
+                    //     OpusMtTranslationEngine.ensureTokenizerFiles)
                     //   manifest.json (when the archive carries one)        (root)
                     destRel = when {
                         base.endsWith(".onnx") -> base

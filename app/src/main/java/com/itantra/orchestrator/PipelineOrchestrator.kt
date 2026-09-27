@@ -118,12 +118,17 @@ class PipelineOrchestrator(
         vadEngine = vadEngine
     )
 
+    /**
+     * This phone's ONE language preference: what its user speaks into the mic AND what they
+     * want incoming messages spoken back in. There is no separate "target" to pick — every
+     * message this phone SENDS goes out in this language, untranslated (see
+     * finalizeUtteranceAndSend); every message this phone RECEIVES is translated INTO this
+     * language by [ReceiverLanguagePolicy] before being spoken, regardless of what language the
+     * sender used. That is what lets one broadcast reach phones with different preferences.
+     */
     var currentLanguage: SupportedLanguage = SupportedLanguage.HINDI
         set(value) {
             if (field != value) {
-                // The target follows the spoken language until the user deliberately picks a
-                // different one; otherwise switching to English would silently start translating.
-                if (targetLanguage == field) targetLanguage = value
                 field = value
                 // Heavy model (re)initialization is deferred off the calling thread
                 // (Mirrors the UI thread — sherpa load is slow and must not block the
@@ -136,24 +141,10 @@ class PipelineOrchestrator(
             }
         }
 
-    /**
-     * CROSS-LANGUAGE: the language spoken into the microphone (STT input) —
-     * mirrors [currentLanguage] for backward compatibility.
-     */
+    /** Mirrors [currentLanguage] for backward compatibility with older call sites. */
     var sourceLanguage: SupportedLanguage
         get() = currentLanguage
         set(value) { currentLanguage = value }
-
-    /** The language the receiver expects — the transmitted text + receiver TTS language.
-     *  Defaults to the source language (SAME-LANGUAGE MODE). */
-    var targetLanguage: SupportedLanguage = SupportedLanguage.HINDI
-
-    /** Active directed language pair (source → target). */
-    val activeLanguagePair: com.itantra.translation.LanguagePair
-        get() = com.itantra.translation.LanguagePair(currentLanguage, targetLanguage)
-
-    /** True when cross-language mode is selected (source != target). */
-    val isCrossLanguageMode: Boolean get() = sourceLanguage != targetLanguage
 
     var operatingMode: OperatingMode = OperatingMode.PUSH_TO_TALK
     var isLoopbackOnly = false // For single-phone testing (Checkpoint 5)
@@ -208,19 +199,6 @@ class PipelineOrchestrator(
     }
 
     fun peerCapabilities(peerId: String): PeerCapabilities? = peerCapabilities[peerId]
-
-    /**
-     * Optional AUTO TARGET: when the destination peer advertises a TTS language,
-     * set the target language to it (unless the user forced a manual target).
-     */
-    fun applyAutoTargetIfAvailable(peerId: String): Boolean {
-        val caps = peerCapabilities[peerId] ?: return false
-        val ttsLang = caps.ttsLanguages.firstOrNull() ?: return false
-        val lang = SupportedLanguage.fromCode(ttsLang)
-        if (lang.code != ttsLang) return false // unknown code advertised — ignore
-        targetLanguage = lang
-        return true
-    }
 
     private val speechAudioBuffer = mutableListOf<Float>()
 
@@ -563,41 +541,15 @@ class PipelineOrchestrator(
                 return@launch
             }
 
-            // CROSS-LANGUAGE: translate BEFORE encryption (sender-side).
-            // SAME-LANGUAGE MODE (source == target) skips translation entirely.
-            val targetLang = targetLanguage
-            var translationResult: com.itantra.translation.TranslationResult? = null
-            val packetText: String
-            val packetLanguage: String
-
-            val outcome = com.itantra.translation.CrossLanguagePipeline.apply(
-                sourceText = normalizedText,
-                source = sourceLanguage,
-                target = targetLang,
-                translate = { txt, s, t ->
-                    speechModelManager.translate(txt, s, t)
-                }
-            )
-            when {
-                outcome is com.itantra.translation.CrossLanguagePipeline.Outcome.SameLanguage -> {
-                    packetText = outcome.text
-                    packetLanguage = sourceLanguage.code
-                }
-                outcome is com.itantra.translation.CrossLanguagePipeline.Outcome.Translated -> {
-                    _transceiverState.value = TransceiverState.TRANSLATING
-                    translationResult = TranslationResultFor(outcome)
-                    packetText = outcome.text
-                    packetLanguage = outcome.target
-                }
-                outcome is com.itantra.translation.CrossLanguagePipeline.Outcome.Unavailable -> {
-                    // NEVER send untranslated text mislabeled as the target language.
-                    Log.w(TAG, "Cross-language translation unavailable: ${outcome.error}")
-                    _lastReceivedText.value = "Cross-language unavailable: ${outcome.error}"
-                    _transceiverState.value = TransceiverState.TRANSLATION_FAILED
-                    return@launch
-                }
-                else -> return@launch
-            }
+            // NEVER translate on the sender: every phone has ONE preference — the language its
+            // user speaks AND wants to hear — and always transmits in that language, untouched.
+            // Each RECEIVER independently translates the incoming text into ITS OWN preference
+            // (ReceiverLanguagePolicy, applied in handleIncomingPacket) before speaking it. This
+            // is what lets one broadcast reach phones with different preferences, and it is the
+            // ONLY translation path: a sender-side "target language" concept does not exist here
+            // (the UI has no such control — see MainActivity, single "my language" selector).
+            val packetText = normalizedText
+            val packetLanguage = sourceLanguage.code
 
             val packet = buildPacket(
                 text = packetText,
@@ -618,10 +570,7 @@ class PipelineOrchestrator(
                     packet,
                     tSpeechStart = speechStartTimestamp, tSpeechEnd = speechEndTimestamp,
                     tSttStart = tSttStart, tSttEnd = tSttEnd,
-                    tSend = BenchmarkLogger.nowMs(),
-                    tTransStart = translationResult?.latencyMs?.let { translateStartFrom(tSttEnd, it) } ?: 0L,
-                    tTransEnd = translationResult?.let { tSttEnd } ?: 0L,
-                    translationLatency = translationResult?.latencyMs ?: 0L
+                    tSend = BenchmarkLogger.nowMs()
                 )
             } else {
                 _transceiverState.value = TransceiverState.TRANSMITTING
@@ -640,13 +589,6 @@ class PipelineOrchestrator(
                 }
                 val jsonBytes = packet.toJsonBytes().size
                 BenchmarkLogger.logPacketSize(packetLanguage, packetText, binaryBytes, jsonBytes)
-                // Packet-size comparison: source vs translated (both real measurements).
-                BenchmarkLogger.logTranslationPacketSize(
-                    language = sourceLanguage.code,
-                    sourceText = normalizedText,
-                    targetText = packetText,
-                    packetBytes = binaryBytes
-                )
 
                 meshRoutingManager?.sendReliablePacket(packet) { acknowledged ->
                     Log.i(TAG, "Message ${packet.messageId} delivery status: ACK=$acknowledged")
@@ -671,22 +613,10 @@ class PipelineOrchestrator(
         Log.i(TAG, "Transport ready=${t.isReadyToSend()} connected=${t.isConnected()}")
     }
 
-    private fun translateStartFrom(transEnd: Long, latency: Long): Long = transEnd - latency
-
-    /** Reconstruct a TranslationResult from a successful pipeline outcome for benchmark logging. */
-    private fun TranslationResultFor(outcome: com.itantra.translation.CrossLanguagePipeline.Outcome.Translated): com.itantra.translation.TranslationResult =
-        com.itantra.translation.TranslationResult(
-            translatedText = outcome.text,
-            sourceLanguage = sourceLanguage.code,
-            targetLanguage = outcome.target,
-            latencyMs = outcome.latencyMs,
-            success = true
-        )
-
     /**
      * Fallback for typing text directly when speech/STT is unavailable or user chooses typing.
-     * Cross-language: transcription/typed text in [sourceLanguage] is translated to
-     * [targetLanguage] before transmission (SOS/alert bypasses translation).
+     * Always sent in [sourceLanguage], untranslated — see the note in
+     * finalizeUtteranceAndSend(): translation is a RECEIVER-side concern only.
      */
     fun sendDirectTextMessage(text: String, isAlert: Boolean = false) {
         val clean = IndicTextNormalizer.normalize(text, currentLanguage.code)
@@ -694,19 +624,8 @@ class PipelineOrchestrator(
 
         coroutineScope.launch {
             _lastTranscribedText.value = "[Typed] $clean"
-            // SOS / alert never goes through translation.
             val type = if (isAlert) PacketType.EMERGENCY else PacketType.DATA
-            val lang = if (isAlert) sourceLanguage.code else targetLanguage.code
-            val outText = if (isAlert || sourceLanguage == targetLanguage) clean else {
-                val res = speechModelManager.translate(clean, sourceLanguage.code, targetLanguage.code)
-                if (!res.success || res.translatedText.isBlank()) {
-                    _lastReceivedText.value = "Cross-language unavailable: ${res.error}"
-                    _transceiverState.value = TransceiverState.TRANSLATION_FAILED
-                    return@launch
-                }
-                res.translatedText
-            }
-            val packet = buildPacket(text = outText, language = lang, isAlert = isAlert, type = type)
+            val packet = buildPacket(text = clean, language = sourceLanguage.code, isAlert = isAlert, type = type)
 
             if (!isLoopbackOnly) awaitTransportReady(READY_WAIT_MS)
             if (isLoopbackOnly || transport == null || !transport!!.isConnected()) {

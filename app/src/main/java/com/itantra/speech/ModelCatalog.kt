@@ -386,10 +386,32 @@ object ModelCatalog {
     private const val MT_RELEASE_BASE =
         "https://github.com/NihalMishra3009/ITANTRA/releases/download/mt-onnx"
 
-    /** Verified pack metadata for the two currently hosted directions. */
+    /**
+     * Verified pack metadata for the currently hosted directions.
+     *
+     * REPLACED 2026-09-27 (both checksum AND correctness): the packs previously hosted here
+     * were exported without `final_logits_bias` — MarianMTModel.forward() computes
+     * `lm_head(decoder_output) + final_logits_bias`, and the earlier ONNX decoder graph
+     * silently omitted the "+ final_logits_bias" term. That bias is not small (max |bias|
+     * 5.7-14.6 across nearly every vocabulary entry, checked for every pair below), so every
+     * prior pack was one add away from the real model — it only matched Hugging Face on the
+     * specific sentences used to "verify" it at the time, by chance. A second, independent bug
+     * (the decode loop could select the pad token as an output token, which for mr-en was its
+     * argmax winner at step 0, always producing an EMPTY translation) is also fixed in the
+     * decode loop (app/src/main/cpp/nnmt_jni.cpp) and the exporter (model-conversion/
+     * convert_opus_mt_onnx.py). See docs/CURRENT_STATUS.md for the on-device verification.
+     *
+     * mr-en (Marathi -> English) is NOT hosted: even with both fixes, its own greedy decode
+     * occasionally reproduces unrelated training-corpus boilerplate on longer sentences — not
+     * safe to ship for a disaster-communication app. en-mr (English -> Marathi, needed for the
+     * Hindi-sender/Marathi-receiver case via the hi->en->mr pivot) is hosted; its fluency is
+     * good but sometimes a valid alternate phrasing rather than the closest one, documented
+     * honestly rather than claimed as parity with hi/en.
+     */
     private val hostedMtPacks = mapOf(
-        "hi-en" to Triple(513_509_018L, "43a38aa6766d08c5e8cd834cf398505e9994536ebb4c74d1ab2eb167fe5ee0d0", "opus-mt-hi-en"),
-        "en-hi" to Triple(518_143_817L, "639decd98c1f558b9bd51712cbda1facb830da3537891f369bc32d786ab455e2", "opus-mt-en-hi")
+        "hi-en" to Triple(97_945_958L, "bd84a52f0ded8f3399477ccd23cb9e8c38eeacf6022681ea60e0869d2d15420f", "opus-mt-hi-en"),
+        "en-hi" to Triple(103_109_242L, "082242fc0b7b51ff693c2c5cb7396d07102cdb29096addb11bce6a180dd0558e", "opus-mt-en-hi"),
+        "en-mr" to Triple(89_449_324L, "f093aae994470f0b0d69263c0d8b7788b8a7c1068ed37238cda7a768bf14b21b", "opus-mt-en-mr")
     )
 
     /** Offline neural translation model packs (role TRANSLATION). */
@@ -407,15 +429,15 @@ object ModelCatalog {
                 checksumSha256 = hosted?.second ?: "", // real SHA-256, or empty when not hosted
                 license = "Apache-2.0 (Helsinki-NLP Opus-MT; conversion via Marian + SentencePiece)",
                 runtime = Mlruntime.ONNX_MT,
-                quantization = Quantization.FP32,
+                quantization = if (hosted != null) Quantization.INT8 else Quantization.FP32,
                 sampleRate = 0,
-                supportedDeviceClass = DeviceClass.MID,
+                supportedDeviceClass = DeviceClass.LOW,
                 downloadUrl = hosted?.let { "$MT_RELEASE_BASE/opm-$key.tar.gz" }, // null when not hosted
                 isArchive = true,
                 isMultilingualShared = false,
                 supportsLanguage = true,
                 notes = if (hosted != null) {
-                    "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0), verified ONNX-vs-HF parity. Download → SHA-256 verified → fully offline after install."
+                    "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0), INT8-quantized (~90-103MB, down from ~515-560MB FP32) for low-end devices. Verified against a from-scratch Hugging Face greedy decode on-device (see docs/CURRENT_STATUS.md). Download → SHA-256 verified → fully offline after install."
                 } else {
                     "Offline neural translation ${src.displayName} → ${tgt.displayName} via Helsinki-NLP Opus-MT (Apache-2.0). Requires encoder_model.onnx + decoder_model.onnx + config.json + tokenizer/ under models/translation/${src.code}-${tgt.code}/ to be genuinely executable; not hosted/downloadable yet."
                 },

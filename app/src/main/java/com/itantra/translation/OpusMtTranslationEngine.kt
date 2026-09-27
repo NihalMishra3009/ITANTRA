@@ -7,23 +7,33 @@ import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Offline neural Hindi<->English translation via Helsinki-NLP Opus-MT exported to
- * a seq2seq ONNX deployment (encoder_model.onnx + decoder_model.onnx), executed by
- * a small native JNI adapter (libitantra_mt.so) that calls the ONNX Runtime C API
- * ALREADY LINKED by sherpa-onnx — no second libonnxruntime.so is bundled. Fully
- * on-device, no network. Apache-2.0.
+ * Offline neural translation via Helsinki-NLP Opus-MT (Apache-2.0) exported to a
+ * seq2seq ONNX deployment (encoder_model.onnx + decoder_model.onnx) per directed
+ * pair, executed by a small native JNI adapter (libitantra_mt.so) that calls the
+ * ONNX Runtime C API ALREADY LINKED by sherpa-onnx — no second libonnxruntime.so
+ * is bundled. Fully on-device, no network. Pairs without a real EN<->X model route
+ * through English as a two-hop pivot (see [TranslationCatalog]).
  *
- * MODEL PACK CONTRACT:
+ * MODEL PACK CONTRACT (the DOWNLOADED artifact):
  *   {filesDir}/models/translation/{src}-{tgt}/
  *     encoder_model.onnx
  *     decoder_model.onnx
  *     config.json              (decoder_start/pad/eos/bos ids, vocab_size)
- *     tokenizer/sp.vocab       (exact vocab: "<id>\t<piece>")
- *     tokenizer/sentencepiece.model (the real Marian SentencePiece model)
+ *
+ * TOKENIZER (bundled in the APK per pair, NOT downloaded): Marian tokenization is
+ * three files, not one — a SOURCE SentencePiece model that splits text into
+ * pieces, a shared VOCAB table mapping each piece to the model's token id (NOT the
+ * SentencePiece id — feeding those instead once shipped and produced ~30s of
+ * random-word audio on a real device before this was caught), and a TARGET
+ * SentencePiece model that turns output pieces back into text:
+ *   assets/models/translation-tokenizers/{src}-{tgt}/{source.spm,target.spm,vocab.tsv}
+ * [ensureTokenizerFiles] copies these into the pack's tokenizer/ dir on first load
+ * when a hosted pack predates them. See model-conversion/verify_native_tokenizer.py,
+ * which mirrors the native algorithm against Hugging Face.
  *
  * Sessions are cached per pair in native code (created once, reused). If the model
- * pack (or the native adapter) is absent the engine returns TRANSLATION_UNAVAILABLE
- * — it NEVER fabricates a translation.
+ * pack, its tokenizer, or the native adapter is absent the engine returns
+ * TRANSLATION_UNAVAILABLE — it NEVER fabricates a translation.
  */
 /**
  * Structured native result — unambiguous, not string-sniffed. Returned by

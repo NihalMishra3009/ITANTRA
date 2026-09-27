@@ -219,7 +219,11 @@
                     android:alpha="0.15"
                     android:background="@drawable/status_node" />
 
-                <!-- Language FROM/TO dropdowns — top-left above PTT -->
+                <!-- This phone's ONE language preference — top-left above PTT. There is
+                     deliberately no second "TO" selector: every phone always sends in its own
+                     language, untranslated, and every receiver independently translates
+                     incoming text into ITS OWN preference before speaking it. A sender neither
+                     knows nor needs to pick what any receiver prefers. -->
                 <LinearLayout
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
@@ -230,7 +234,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="@string/lang_from"
+                        android:text="@string/lang_my_language"
                         android:textAllCaps="true"
                         android:textColor="@color/text_faint"
                         android:textSize="8sp"
@@ -238,27 +242,6 @@
 
                     <Spinner
                         android:id="@+id/spinnerLanguage"
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="2dp"
-                        android:background="@drawable/bg_button_rounded"
-                        android:backgroundTint="@color/bg_surface_raised"
-                        android:popupBackground="@drawable/bg_popup"
-                        android:paddingHorizontal="10dp"
-                        android:dropDownVerticalOffset="4dp" />
-
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="4dp"
-                        android:text="@string/lang_to"
-                        android:textAllCaps="true"
-                        android:textColor="@color/text_faint"
-                        android:textSize="8sp"
-                        android:letterSpacing="0.14" />
-
-                    <Spinner
-                        android:id="@+id/spinnerLanguageTarget"
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
                         android:layout_marginTop="2dp"

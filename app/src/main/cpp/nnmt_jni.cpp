@@ -210,11 +210,22 @@ void clearPair() {
 
 } // namespace
 
-static int64_t argmaxOverLogits(const std::vector<float>& logits, int64_t rowStart, int64_t vocabSize) {
+// excludeId: a token that can never be SELECTED as output, e.g. pad_token_id. Marian's own
+// HF generation_config ships a `bad_words_ids: [[pad_token_id]]` entry for exactly this reason
+// — pad only seeds decoder_start_token_id, it is not part of the output vocabulary. Skipping
+// this masking is not cosmetic: for at least one shipped pair (mr-en) the model's single
+// highest-probability token at step 0 IS the pad token, so an unmasked greedy argmax picks it
+// immediately, and a loop that also treats "generated == pad" as an end-of-sequence signal (as
+// this one does, matching eos) then emits ZERO output tokens — a silent, always-empty
+// translation with no error, for exactly the pairs that are precisely at risk (short/ambiguous
+// source sentences). Discovered when a real conversion run reproduced it consistently.
+static int64_t argmaxOverLogits(const std::vector<float>& logits, int64_t rowStart, int64_t vocabSize,
+                                 int64_t excludeId = -1) {
     if (rowStart < 0) return -1;
     if ((size_t)(rowStart + vocabSize) > logits.size()) return -1;  // OOB guard (Phase 6)
-    int64_t best = 0; float bestv = -1e30f;
+    int64_t best = -1; float bestv = -1e30f;
     for (int64_t t = 0; t < vocabSize; ++t) {
+        if (t == excludeId) continue;
         float x = logits[(size_t)(rowStart + t)];
         if (x > bestv) { bestv = x; best = t; }
     }
@@ -395,7 +406,10 @@ Java_com_itantra_translation_OpusMtTranslationEngine_nnTranslate(
         }
         std::vector<float> logits((float*)logitsData, (float*)logitsData + safeCount);
         g_ort->ReleaseValue(decOuts[0]);
-        int64_t next = argmaxOverLogits(logits, (tDim - 1) * vDim, vDim);
+        // pad can never be the model's own decoder_start echo AND a real output token at once;
+        // exclude it from the candidate pool (unless the pack degenerately equates pad==eos).
+        const int64_t excludePad = (model.pad_id != model.eos_id) ? model.pad_id : -1;
+        int64_t next = argmaxOverLogits(logits, (tDim - 1) * vDim, vDim, excludePad);
         // Pathological-logits / shape guard (Phase 6): an out-of-range argmax
         // (all -inf logits, corrupt tensor) terminates generation safely.
         if (next < 0 || next >= vocabSize) { done = true; break; }

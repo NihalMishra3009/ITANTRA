@@ -78,15 +78,48 @@ Key design decisions:
 
 ## Cross-language runtime status
 
+- **Receiver-side language preference (2026-09-27):** each phone has its own language
+  preference. The SENDER transmits in its own spoken language; every RECEIVER translates
+  the incoming text into ITS OWN preferred language before speaking it
+  (`ReceiverLanguagePolicy`), independent of what the sender used. A Hindi sender and a
+  Marathi-preferring receiver, for example, works via the two-hop EN pivot (hi→en→mr) —
+  **verified live on two physical phones over Bluetooth** (OPPO CPH2127 → Realme
+  RMX3870): receiver screen showed "मराठी" for FROM/TO, logs showed
+  `RX translate hi->mr` then `TTS [mr]`. SOS/emergency traffic is never translated.
 - **Architecture (all 10 languages, EN-pivot):** COMPLETE (unit-tested)
-- **Native runtime (JNI + Marian tokenizer + ORT):** WORKING for hi↔en on two physical
-  ARM64 phones. (An earlier revision claimed "tokenizer parity 6/6"; that test fed the
-  model Hugging Face's ids and could not see that the native code used different, wrong
-  ones, so on-device output was garbage until the Marian tokenizer was added. The check
-  is now `model-conversion/verify_native_tokenizer.py`, which mirrors the native steps.)
-- **Model artifacts:** only hi↔en exist. Open Opus-MT has no gu/kn/ta/te/or models;
-  IndicTrans2 (MIT) would cover all ten and has not been started.
-- **Real device HI↔EN translation verified:** YES on two phones (OPPO CPH2127, moto g32) after the Marian-tokenizer fix; output identical to Hugging Face. **Only these 2 of the 90 directed language pairs translate today.** The other 88 are delivered and spoken untranslated.
+- **Native runtime (JNI + Marian tokenizer + ORT):** WORKING on two physical ARM64
+  phones for hi↔en and en→mr. Two critical, previously-undetected bugs were found and
+  fixed while adding Marathi (2026-09-27), and affected EVERY translation pack ever
+  shipped, including the already-"verified" hi↔en ones:
+  1. **Missing `final_logits_bias`.** `MarianMTModel.forward()` computes
+     `lm_head(decoder_output) + final_logits_bias`; the exported decoder graph silently
+     dropped the "+ final_logits_bias" term. That bias is not small (max |bias| 5.7–14.6
+     across nearly every vocabulary entry, checked for all 4 pairs) — every prior pack
+     was one add away from the real model, and only matched Hugging Face on the specific
+     test sentences used at the time, by chance.
+  2. **Missing pad-token exclusion.** Marian's own `generation_config.json` bans the pad
+     token from ever being a real output token (`bad_words_ids`). Without that mask, the
+     greedy decoder's argmax can select pad as its very first token — which for mr-en it
+     reliably did — producing a silent, always-EMPTY translation with no error.
+     `model-conversion/convert_opus_mt_onnx.py` and `app/src/main/cpp/nnmt_jni.cpp` both
+     fix this now; `model-conversion/verify_native_tokenizer.py` (an independently
+     re-implemented check) catches a regression of either bug.
+- **Quantization (low-end-device requirement):** every hosted pack is now INT8-quantized
+  (`onnxruntime.quantization.quantize_dynamic`), verified against the FP32 output before
+  hosting. ~515–560MB FP32 → ~90–103MB INT8 (about 75% smaller); the app was already
+  built to prefer these once a `Quantization.INT8` pack is hosted.
+- **Model artifacts hosted:** hi↔en (re-converted with both fixes) and en→mr (new).
+  **mr→en is deliberately NOT hosted**: even with both bugs fixed, its own greedy decode
+  occasionally reproduces unrelated training-corpus text (observed: an unrelated
+  religious-literature paragraph) on longer sentences — not acceptable for a
+  disaster-communication app. Open Opus-MT has no direct model at all for gu/kn/ta/te/or;
+  AI4Bharat IndicTrans2 (MIT) would cover all ten and has not been started.
+- **Real device translation verified:** hi↔en and en→mr, on two phones, after both
+  fixes; output verified against a from-scratch Hugging Face greedy decode (not
+  `generate()`, which applies extra logits processors the on-device decoder does not
+  reproduce). **4 of the 90 directed language pairs translate today** (hi→en, en→hi,
+  en→mr, and hi→mr via the en pivot). The other 86 are delivered and spoken untranslated,
+  honestly reported as such by the UI.
 
 ---
 

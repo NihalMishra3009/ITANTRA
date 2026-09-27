@@ -266,3 +266,63 @@ ids -> vocab -> target.spm), the tokenizer files bundled in the APK for the two 
 
 **Not tested:** translation from real speech (STT of Hindi is weak on Whisper base; the matrix used typed text); a
 third phone with a third language; the on-device pack install of the 500 MB translation packs (packs were pushed by adb).
+
+## N. Two critical translation bugs fixed; Marathi added; verified on two phones (2026-09-27)
+
+Section M's "2/90 pairs translate" was itself running on **silently broken** packs. Investigating why Hindi→Marathi
+(a direct user request: "sender sends Hindi, receiver plays Marathi, preferred by receiver") produced garbage found
+two bugs that affected the ALREADY-HOSTED hi-en/en-hi packs too, not just the new Marathi ones:
+
+1. **Missing `final_logits_bias`.** `MarianMTModel.forward()` computes `lm_head(decoder_output) + final_logits_bias`.
+   The exported decoder ONNX graph (`model-conversion/convert_opus_mt_onnx.py`) silently omitted the
+   "`+ final_logits_bias`" term — it only called `lm_head(...)`. That bias is not small: max `|bias|` of 5.7–14.6
+   across nearly every vocabulary entry, checked for hi-en, en-hi, en-mr and mr-en. Every previously-exported pack
+   (including the hi-en/en-hi ones "verified" in section L/M) was one tensor-add away from the real model, and only
+   matched Hugging Face on the specific 1–2 test sentences used to check it, by chance.
+2. **Missing pad-token exclusion.** Marian's own `generation_config.json` lists `bad_words_ids: [[pad_token_id]]` —
+   the pad token must never be selected as a real output token, only used to seed `decoder_start_token_id`. The
+   greedy decode loop (both the Python conversion script and `app/src/main/cpp/nnmt_jni.cpp`) had no such mask. For
+   mr-en, pad token IS the argmax winner at step 0, so the old loop emitted **zero tokens** — an always-empty
+   translation with no error, for every mr-en input tried.
+
+Both are now fixed (`DecoderLMWrapper` adds the bias as a traced constant; `argmaxOverLogits` takes an `excludeId`).
+
+**Re-verification (own algorithm vs a from-scratch Hugging Face greedy decode, NOT `model.generate()` — that applies
+extra logits processors the on-device decoder does not reproduce), 5 sentences per pair:**
+
+| Pair | Garbage/empty (hard fail) | Exact or near-tie match vs HF |
+|---|---|---|
+| hi-en (FP32 / INT8) | 0/5 both | 4/5, 5/5 |
+| en-hi (FP32 / INT8) | 0/5 both | 5/5, 5/5 |
+| en-mr (FP32 / INT8) | 0/5 both | 1/5, 3/5 — fluent but more often a *different, still-valid* phrasing than hi/en |
+| mr-en (FP32) | **2/5** (unrelated-boilerplate hallucination on longer sentences, e.g. an unconnected religious-literature paragraph for an emergency-adjacent sentence) | — |
+
+**Decision: mr-en is NOT hosted.** Even fixed, its own greedy decode is unreliable on exactly the kind of longer,
+consequential sentences a disaster-communication app exists for. en-mr (needed for the hi→en→mr pivot in the user's
+example) IS hosted, with its lower agreement-with-HF honestly documented above rather than claimed as parity.
+
+**Quantization (open-source-and-low-end-device requirement):** all 3 hosted packs are now INT8
+(`onnxruntime.quantization.quantize_dynamic`), each verified against its own FP32 output before hosting.
+515–560 MB FP32 → 90–103 MB INT8 (~75% smaller), replacing the previously-hosted FP32-only packs.
+
+**Live two-phone test (OPPO CPH2127 sender, Realme RMX3870 receiver, over BLE, receiver's language set to Marathi):**
+sent "मुझे मदद चाहिए, कृपया सहायता भेजें" (Hindi) — receiver log: `RX translate hi->mr 2549ms` then
+`TTS [mr] ... 26603 samples`; receiver screen showed **FROM: मराठी, TO: मराठी**, connected over BLUETOOTH. This is
+the exact scenario requested: Hindi sender, Marathi-preferring receiver, receiver hears Marathi.
+
+**Also fixed (found while investigating):** `ModelStorageManager.translationRequiredFiles` still required the
+pre-Marian-tokenizer file names (`tokenizer/sentencepiece.model`, `tokenizer/sp.vocab`), which no longer exist in any
+correctly-converted pack. A correctly-downloaded pack would report as "not installed", silently gating cross-language
+PTT off in the real UI even though `translate()` itself worked (only debug/direct calls bypassed the check, which is
+why this was not caught in section M's testing). Tokenizer files are bundled per-pair in the APK and copied in
+lazily on first load — they were never part of the *downloaded* artifact's completeness contract; the check no
+longer requires them.
+
+**Windows-only tooling note:** `onnxruntime.quantization.quantize_dynamic(path, ...)` reliably lost a race deleting
+its own `*-inferred.onnx` shape-inference temp file on this machine (Windows, likely AV/indexer holding a freshly
+written ~500 MB file). Fixed by doing shape inference in-memory and passing `quantize_dynamic` an already-loaded
+`onnx.ModelProto` instead of a path, which skips that file entirely. Unrelated to model correctness.
+
+**Not tested:** translation from real speech for en-mr/hi-mr (typed text only, as in section M); en-mr/mr-en install
+via the real download UI (packs were pushed by adb, as in prior sessions); gu/kn/ta/te/or, which have no Opus-MT
+model to convert at all (AI4Bharat IndicTrans2, MIT, would cover them and has not been started).

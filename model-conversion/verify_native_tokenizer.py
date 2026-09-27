@@ -79,10 +79,16 @@ def main() -> int:
         hidden = enc.run(["last_hidden_state"], {"input_ids": np.asarray([ids], dtype=np.int64)})[0]
         cur, gen = [start], []
         for _ in range(min(128, len(ids) * 3 + 16)):
-            logits = dec.run(["logits"], {"input_ids": np.asarray([cur], dtype=np.int64),
-                                          "encoder_hidden_states": hidden})[0]
-            nxt = int(np.argmax(logits[0, -1, :]))
-            if nxt in (eos, pad):
+            step_logits = dec.run(["logits"], {"input_ids": np.asarray([cur], dtype=np.int64),
+                                               "encoder_hidden_states": hidden})[0][0, -1, :].copy()
+            # pad only seeds decoder_start_token_id; Marian's own generation_config bans it from
+            # ever being an output token (bad_words_ids). Without this mask, at least one shipped
+            # pair (mr-en) has pad win the argmax at step 0, so the loop emits nothing at all —
+            # matches the fix in app/src/main/cpp/nnmt_jni.cpp and convert_opus_mt_onnx.py.
+            if pad != eos:
+                step_logits[pad] = -1e30
+            nxt = int(np.argmax(step_logits))
+            if nxt == eos:
                 break
             gen.append(nxt)
             cur.append(nxt)

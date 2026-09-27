@@ -160,11 +160,7 @@ class MainActivity : AppCompatActivity() {
     private fun debugSpeakWav(i: android.content.Intent) {
         val name = i.getStringExtra("file") ?: return
         val holdMs = i.getIntExtra("hold_ms", 3000).toLong()
-        i.getStringExtra("lang")?.let {
-            val l = com.itantra.stt.SupportedLanguage.fromCode(it)
-            orchestrator.currentLanguage = l
-            orchestrator.targetLanguage = l
-        }
+        i.getStringExtra("lang")?.let { orchestrator.currentLanguage = com.itantra.stt.SupportedLanguage.fromCode(it) }
         val f = java.io.File(filesDir, name)
         if (!f.isFile) { android.util.Log.e("DebugSpeak", "missing ${f.absolutePath}"); return }
         val pcm = f.readBytes().let { b ->
@@ -193,19 +189,11 @@ class MainActivity : AppCompatActivity() {
                 if (i?.action == "com.itantra.debug.PLAY_WAV") { debugPlayWav(i); return }
                 if (i?.action == "com.itantra.debug.SET_LANG") {
                     // This phone's language preference: what its user speaks AND wants to hear.
-                    i.getStringExtra("lang")?.let {
-                        val l = com.itantra.stt.SupportedLanguage.fromCode(it)
-                        orchestrator.currentLanguage = l
-                        orchestrator.targetLanguage = l
-                    }
+                    i.getStringExtra("lang")?.let { orchestrator.currentLanguage = com.itantra.stt.SupportedLanguage.fromCode(it) }
                     return
                 }
-                i?.getStringExtra("lang")?.let {
-                    // Typed text in a given language (the sender's own language).
-                    val l = com.itantra.stt.SupportedLanguage.fromCode(it)
-                    orchestrator.currentLanguage = l
-                    orchestrator.targetLanguage = l
-                }
+                // Typed text in a given language (the sender's own language).
+                i?.getStringExtra("lang")?.let { orchestrator.currentLanguage = com.itantra.stt.SupportedLanguage.fromCode(it) }
                 val text = i?.getStringExtra("text")
                     ?: i?.getStringExtra("text_b64")?.let {
                         String(android.util.Base64.decode(it, android.util.Base64.DEFAULT), Charsets.UTF_8)
@@ -217,11 +205,11 @@ class MainActivity : AppCompatActivity() {
         filter.addAction("com.itantra.debug.SPEAK_WAV")
         filter.addAction("com.itantra.debug.PLAY_WAV")
         filter.addAction("com.itantra.debug.SET_LANG")
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, android.content.Context.RECEIVER_EXPORTED)
-        } else {
-            registerReceiver(receiver, filter)
-        }
+        // ContextCompat picks the right registerReceiver overload per API level (the flag is
+        // ignored below API 33) — a single call that lint can verify is never unprotected.
+        androidx.core.content.ContextCompat.registerReceiver(
+            this, receiver, filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED
+        )
     }
 
     private fun initEngines() {
@@ -262,9 +250,18 @@ class MainActivity : AppCompatActivity() {
         rebuildLanguageDropdown()
     }
 
-    /** Rebuild the language dropdown from CURRENT model availability. Called at
-     *  startup and again in onResume so a voice installed from the Models screen
-     *  (or deleted) reflects immediately. */
+    /**
+     * Rebuild the SINGLE language selector from CURRENT model availability. Called at startup
+     * and again in onResume so a voice installed from the Models screen (or deleted) reflects
+     * immediately.
+     *
+     * Only ONE language is ever picked here: this phone's own preference — what its user
+     * speaks AND wants to hear. There used to be a second "TO" selector here for a per-message
+     * target language; it is gone. Every phone always SENDS in its own language, untranslated;
+     * every RECEIVER independently translates incoming text into ITS OWN preference before
+     * speaking it (see the doc comment on PipelineOrchestrator.currentLanguage). A sender never
+     * needs to know, or pick, what any receiver prefers.
+     */
     private fun rebuildLanguageDropdown() {
         val langs = dropdownLanguages()
         if (langs.isEmpty()) return
@@ -283,9 +280,8 @@ class MainActivity : AppCompatActivity() {
                         orchestrator.speechModelManager.selectLanguage(lang)
                     }
                 }
-                syncTargetDefault(lang, previous)
                 adapter.notifyDataSetChanged()
-                renderLanguageMode()
+                refreshPeerState()
             }
 
             override fun onNothingSelected(parent: AdapterView<*>?) {}
@@ -293,42 +289,6 @@ class MainActivity : AppCompatActivity() {
         val initial = langs.indexOfFirst { it == orchestrator.currentLanguage }
             .takeIf { it >= 0 } ?: langs.indexOfFirst { it == previous }.takeIf { it >= 0 } ?: 0
         binding.spinnerLanguage.setSelection(initial, false)
-
-        // Second (TO) dropdown: the language the receiver expects.
-        val targetAdapter = LanguageAdapter(this, langs)
-        binding.spinnerLanguageTarget.adapter = targetAdapter
-        binding.spinnerLanguageTarget.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
-                val lang = langs[position]
-                if (orchestrator.targetLanguage != lang) {
-                    orchestrator.targetLanguage = lang
-                }
-                targetAdapter.notifyDataSetChanged()
-                renderLanguageMode()
-            }
-
-            override fun onNothingSelected(parent: AdapterView<*>?) {}
-        }
-        val tInitial = langs.indexOfFirst { it == orchestrator.targetLanguage }
-            .takeIf { it >= 0 } ?: langs.indexOfFirst { it == orchestrator.currentLanguage }.takeIf { it >= 0 } ?: 0
-        binding.spinnerLanguageTarget.setSelection(tInitial, false)
-        renderLanguageMode()
-    }
-
-    /** Keep TO sane when FROM changes: default TO to the new source (same-language) until the user picks otherwise. */
-    private fun syncTargetDefault(newSource: com.itantra.stt.SupportedLanguage, previous: com.itantra.stt.SupportedLanguage?) {
-        // If the user had not explicitly chosen a different TO (or it pointed at the old FROM),
-        // follow the new FROM.
-        val t = binding.spinnerLanguageTarget.selectedItem as? com.itantra.stt.SupportedLanguage
-        if (t == null || t == previous || t == orchestrator.targetLanguage) {
-            orchestrator.targetLanguage = newSource
-            val idx = dropdownLanguages().indexOfFirst { it == newSource }
-            if (idx >= 0) binding.spinnerLanguageTarget.setSelection(idx, false)
-        }
-    }
-
-    /** Render SAME-LANGUAGE vs CROSS-LANGUAGE mode + pipeline readiness where required models are reflected. */
-    private fun renderLanguageMode() {
         refreshPeerState()
     }
 
@@ -445,10 +405,12 @@ class MainActivity : AppCompatActivity() {
 
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
-                    // Phase 18: gate PTT for cross-language — do not let the user discover
-                    // a missing model only after speaking. Same-language always allowed.
+                    // Gate PTT on speech recognition for THIS phone's own language only. There
+                    // is no per-message target/translation model to check here any more — a
+                    // sender never translates (see PipelineOrchestrator.currentLanguage);
+                    // whether a receiver can translate what it hears is entirely that receiver's
+                    // own concern, not something this phone can know or needs to.
                     val src = orchestrator.sourceLanguage
-                    val tgt = orchestrator.targetLanguage
                     if (!orchestrator.speechModelManager.sttAvailable(src.code)) {
                         Toast.makeText(
                             this,
@@ -456,17 +418,6 @@ class MainActivity : AppCompatActivity() {
                             Toast.LENGTH_LONG
                         ).show()
                         return@setOnTouchListener true
-                    }
-                    if (src != tgt) {
-                        val ready = orchestrator.speechModelManager.pipelineReady(src, tgt)
-                        if (!ready) {
-                            Toast.makeText(
-                                this,
-                                "Required offline models missing for ${src.nativeName} → ${tgt.displayName}. Open MODELS.",
-                                Toast.LENGTH_LONG
-                            ).show()
-                            return@setOnTouchListener true
-                        }
                     }
                     binding.btnPtt.backgroundTintList = ContextCompat.getColorStateList(this, R.color.comm_red)
                     binding.btnPtt.text = getString(R.string.ptt_release_to_send)
@@ -695,27 +646,13 @@ class MainActivity : AppCompatActivity() {
         val hops = routes.minOfOrNull { it.hopCount }?.toString() ?: "—"
         val queue = orch.deliveryTracker.getAll()
         val src = orch.sourceLanguage
-        val tgt = orch.targetLanguage
-        val cross = src != tgt
-        val modeLine = if (cross) {
-            "CROSS-LANGUAGE · ${src.nativeName} → ${tgt.displayName}"
-        } else {
-            "SAME-LANGUAGE · ${src.nativeName}"
-        }
+        // This phone speaks and hears ONE language; there is no per-message target to show.
+        // Whether an incoming message gets translated is decided independently by each
+        // receiver, so it is never "cross-language" from the sender's own point of view.
         binding.tvNetworkStats.text =
             "Peers: ${neighbors.size}   ·   Hops: $hops   ·   Transport: $transport\n" +
             "Security: ECDH P-256 · AES-256-GCM   ·   Queue: ${queue.size}\n" +
-            modeLine + if (cross) networkModeSuffix() else ""
-    }
-
-    private fun networkModeSuffix(): String {
-        val src = orchestrator.sourceLanguage
-        val tgt = orchestrator.targetLanguage
-        return if (orchestrator.speechModelManager.pipelineReady(src, tgt)) {
-            "\nOffline translation ready"
-        } else {
-            "\nRequired offline models missing — Open MODELS"
-        }
+            "LANGUAGE · ${src.nativeName}"
     }
 
     // ---------------- Status rendering ----------------

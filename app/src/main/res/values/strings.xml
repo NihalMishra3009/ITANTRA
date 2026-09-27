@@ -82,6 +82,7 @@
     <string name="translating">TRANSLATING</string>
     <string name="lang_from">FROM</string>
     <string name="lang_to">TO</string>
+    <string name="lang_my_language">MY LANGUAGE</string>
     <string name="translation_failed">CROSS-LANGUAGE UNAVAILABLE</string>
     <string name="translation_unavailable">Offline translation model unavailable for this pair.</string>
 

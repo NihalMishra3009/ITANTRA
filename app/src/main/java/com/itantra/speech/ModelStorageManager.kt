@@ -84,15 +84,22 @@ class ModelStorageManager(private val context: Context) {
 
         /** Translation pack required files — DEVICE runtime contract after the installer
          * flattens hosted archives (encoder/decoder .onnx in the models/ subdir move
-         * to the pack root; tokenizer/ stays nested). manifest.json is validated
-         * separately (when present).
+         * to the pack root). manifest.json is validated separately (when present).
+         *
+         * Deliberately does NOT require any tokenizer file here. The Marian tokenizer
+         * (source.spm + target.spm + vocab.tsv) is bundled in the APK per supported
+         * pair and copied into the pack lazily by
+         * OpusMtTranslationEngine.ensureTokenizerFiles() on first load — it is not
+         * part of the DOWNLOADED artifact. Requiring it here previously made a
+         * correctly-downloaded pack report as "not installed" (its encoder/decoder
+         * were present but the pre-fix format's tokenizer/sentencepiece.model and
+         * tokenizer/sp.vocab no longer exist), which silently gated cross-language
+         * PTT off even though translate() itself worked.
          */
         val translationRequiredFiles: List<String> = listOf(
             "encoder_model.onnx",
             "decoder_model.onnx",
             "config.json",
-            "tokenizer/sentencepiece.model",
-            "tokenizer/sp.vocab",
         )
 
         /** Pure (Context-free) translation-pack validation — unit-testable in JVM. */
