@@ -12,6 +12,7 @@ import com.itantra.protocol.PacketType
 import com.itantra.protocol.TextPacket
 import com.itantra.security.MessageSecurityManager
 import com.itantra.security.PeerSessionManager
+import com.itantra.stt.LanguageScript
 import com.itantra.stt.SpellCheckEngine
 import com.itantra.stt.SttEngine
 import com.itantra.stt.SupportedLanguage
@@ -79,6 +80,35 @@ class PipelineOrchestrator(
 
         /** How long a send waits for a nearby phone to finish connecting + securing. */
         private const val READY_WAIT_MS = 5_000L
+
+        /** Matches SttEngine's SAMPLING_RATE; audio here is always resampled to 16kHz mono. */
+        private const val LID_SAMPLE_RATE_HZ = 16_000
+
+        /**
+         * A spoken-language-identification result below this much actual AUDIO (not decode wall
+         * time — Whisper's own inference-time log field is not audio length) is not trusted as a
+         * mismatch signal. Live testing hit a real misdetection from a very short clip ("I need
+         * help" tagged "hi"); sherpa-onnx's SpokenLanguageIdentification here reuses the Whisper
+         * encoder, which was trained on much longer (up to 30s) windows, so a sub-second clip
+         * gives it very little real acoustic signal. 1s is a pragmatic floor: comfortably clears
+         * ordinary spoken words/short phrases (VAD-triggered recordings include padding around
+         * speech) while still rejecting the ~0.5s clip that misfired live.
+         */
+        private const val MIN_LID_AUDIO_MS = 1_000L
+
+        /** Extra guard alongside audio duration: too few transcribed words is also low signal. */
+        private const val MIN_LID_WORDS = 2
+
+        /**
+         * The user's own MY-LANGUAGE preference is sticky and affects every future utterance's
+         * decode plus how this user's own incoming messages get translated — a materially bigger
+         * blast radius than mis-tagging one outgoing packet. Requiring the SAME mismatch language
+         * on this many consecutive trustworthy (duration+word+script-checked) utterances before
+         * flipping it guards against exactly the false-positive cascade seen live (ml -> hi,
+         * never recovering) without blocking the very first utterance's packet from being tagged
+         * correctly, which is what the original bug fix (6545cdc) depends on.
+         */
+        private const val MIN_MISMATCH_STREAK_TO_SWITCH_PREFERENCE = 2
     }
 
     private val myNodeIdValue: String
@@ -120,6 +150,17 @@ class PipelineOrchestrator(
     fun consumeLanguageMismatchNotice() {
         _languageMismatchNotice.value = null
     }
+
+    /**
+     * Tracks a candidate persistent MY-LANGUAGE switch that hasn't yet cleared the higher bar
+     * in [finalizeUtteranceAndSend] (see [MIN_MISMATCH_STREAK_TO_SWITCH_PREFERENCE]). A single
+     * weak/short utterance can still correctly tag ITS OWN outgoing packet with the detected
+     * language (fixes the original confirmed bug immediately), without forcing every future
+     * utterance's decode + this user's own incoming-translation target to follow one low-
+     * confidence signal — the ml -> hi -> stuck cascade seen in live testing.
+     */
+    private var pendingMismatchLanguage: SupportedLanguage? = null
+    private var pendingMismatchStreak: Int = 0
 
     private val _lastLatencyMetrics = MutableStateFlow<LatencyRecord?>(null)
     val lastLatencyMetrics: StateFlow<LatencyRecord?> = _lastLatencyMetrics.asStateFlow()
@@ -575,31 +616,79 @@ class PipelineOrchestrator(
 
             // What was ACTUALLY spoken, per sherpa-onnx's Whisper-based language identification
             // — independent of [sourceLanguage], which is only the sender's UI preference (and
-            // what Whisper was forced to decode as, for accuracy). Falls back to sourceLanguage
-            // when detection is unavailable, so this is always safe to use as "the real language".
-            val actualSpokenLanguage = SupportedLanguage.fromCode(sttResult.detectedLanguageCode)
-            if (!actualSpokenLanguage.code.equals(sourceLanguage.code, ignoreCase = true)) {
+            // what Whisper was forced to decode as, for accuracy). This is a RAW candidate only:
+            // LID has no confidence score over the JNI boundary (checked when detectSpokenLanguage
+            // was added in 6545cdc), so it's cross-checked below before being trusted for anything.
+            val detectedLanguage = SupportedLanguage.fromCode(sttResult.detectedLanguageCode)
+            val audioDurationMs = (audioData.size.toLong() * 1000L) / LID_SAMPLE_RATE_HZ
+            val isMismatch = !detectedLanguage.code.equals(sourceLanguage.code, ignoreCase = true)
+            // Three independent, cheap guards — audio length, word count, and does the detected
+            // language's own script actually appear in the transcript (see LanguageScript; this
+            // alone would have caught "I need help" — pure Latin script — being tagged "hi").
+            val lidTrustworthy = isMismatch &&
+                audioDurationMs >= MIN_LID_AUDIO_MS &&
+                UtteranceQuality.words(normalizedText).size >= MIN_LID_WORDS &&
+                LanguageScript.scriptMatches(normalizedText, detectedLanguage.code)
+
+            val effectiveLanguage: SupportedLanguage
+            if (lidTrustworthy) {
                 val fromLang = sourceLanguage
                 Log.w(
                     TAG,
                     "Sender's UI language (${fromLang.code}) does not match the detected " +
-                        "spoken language (${actualSpokenLanguage.code}) — switching MY LANGUAGE to " +
-                        "match what was actually said."
+                        "spoken language (${detectedLanguage.code}) [audio=${audioDurationMs}ms] " +
+                        "— tagging this packet with the detected language."
                 )
-                // The UI selector should reflect what the user actually just spoke, not a stale
-                // preference — setting currentLanguage also reloads STT/TTS for the new language.
-                currentLanguage = actualSpokenLanguage
-                _languageMismatchNotice.value =
-                    "Detected ${actualSpokenLanguage.displayName} — switched from ${fromLang.displayName}"
+                effectiveLanguage = detectedLanguage
+
+                // The persistent MY-LANGUAGE preference needs a HIGHER bar than one packet's tag
+                // — it's sticky and drives every future utterance's decode plus how this user's
+                // own incoming messages get translated. Only flip it once the SAME mismatch
+                // language has repeated on MIN_MISMATCH_STREAK_TO_SWITCH_PREFERENCE consecutive
+                // trustworthy utterances (guards the ml -> hi -> stuck cascade seen live).
+                if (pendingMismatchLanguage == detectedLanguage) {
+                    pendingMismatchStreak++
+                } else {
+                    pendingMismatchLanguage = detectedLanguage
+                    pendingMismatchStreak = 1
+                }
+                if (pendingMismatchStreak >= MIN_MISMATCH_STREAK_TO_SWITCH_PREFERENCE) {
+                    Log.w(
+                        TAG,
+                        "Detected language (${detectedLanguage.code}) confirmed over " +
+                            "$pendingMismatchStreak consecutive utterances — switching MY LANGUAGE."
+                    )
+                    // setting currentLanguage also reloads STT/TTS for the new language.
+                    currentLanguage = detectedLanguage
+                    _languageMismatchNotice.value =
+                        "Detected ${detectedLanguage.displayName} — switched from ${fromLang.displayName}"
+                    pendingMismatchLanguage = null
+                    pendingMismatchStreak = 0
+                }
+            } else {
+                if (isMismatch) {
+                    Log.i(
+                        TAG,
+                        "Detected language (${detectedLanguage.code}) disagreed with sender's " +
+                            "UI (${sourceLanguage.code}) but didn't clear the trust guards " +
+                            "(audio=${audioDurationMs}ms) — keeping sender's selection."
+                    )
+                }
+                // Either the languages agree, or the LID signal wasn't trustworthy enough to act
+                // on. Fall back to the sender's own selection (pre-6545cdc behavior) and don't
+                // let a one-off weak/contradicted signal keep building toward a switch.
+                pendingMismatchLanguage = null
+                pendingMismatchStreak = 0
+                effectiveLanguage = sourceLanguage
             }
 
             // Informational only — flags possibly-misspelled words for future UI surfacing.
             // Never blocks or alters the send, and — like the garbage-utterance check above —
             // never runs on emergency/SOS traffic, so a heuristic can never delay an SOS.
-            // Spellchecked against the ACTUAL spoken language — checking English text against a
-            // Hindi dictionary (or vice versa) would flag everything as misspelled.
+            // Spellchecked against the EFFECTIVE (trust-guarded) language — checking English text
+            // against a Hindi dictionary (or vice versa) would flag everything as misspelled.
             if (!isAlertNext) {
-                val flagged = SpellCheckEngine.check(context, normalizedText, actualSpokenLanguage.code)
+                val flagged = SpellCheckEngine.check(context, normalizedText, effectiveLanguage.code)
                 _lastSpellCheckFlags.value = flagged
                 if (flagged.isNotEmpty()) {
                     Log.i(TAG, "Possible misspelling(s) in \"$normalizedText\": $flagged")
@@ -616,12 +705,13 @@ class PipelineOrchestrator(
             // ONLY translation path: a sender-side "target language" concept does not exist here
             // (the UI has no such control — see MainActivity, single "my language" selector).
             //
-            // The packet is tagged with the DETECTED spoken language, not the sender's raw UI
-            // preference — this is the fix for the bug where a sender set to Hindi but speaking
-            // English produced a packet tagged "hi", so a Hindi-set receiver's ReceiverLanguagePolicy
-            // saw matching languages and never translated the (actually English) text.
+            // The packet is tagged with the EFFECTIVE language — the detected spoken language
+            // when it passed the trust guards above, otherwise the sender's raw UI preference —
+            // this is the fix for the bug where a sender set to Hindi but speaking English
+            // produced a packet tagged "hi", so a Hindi-set receiver's ReceiverLanguagePolicy saw
+            // matching languages and never translated the (actually English) text.
             val packetText = normalizedText
-            val packetLanguage = actualSpokenLanguage.code
+            val packetLanguage = effectiveLanguage.code
 
             val packet = buildPacket(
                 text = packetText,

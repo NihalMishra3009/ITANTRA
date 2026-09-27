@@ -17,7 +17,16 @@ object UtteranceQuality {
     private const val REPEAT_STREAK_SOFT_PENALTY = 3
     private const val IMPLAUSIBLE_WORDS_PER_SECOND = 8f
 
-    private fun words(text: String): List<String> = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    /**
+     * Below this word count, "every word is a single codepoint" becomes a plausible signal of
+     * a Whisper hallucination on near-silent/very short audio (isolated matras/diacritics,
+     * sometimes mixed with a lone consonant — see [isGarbage]). A single one-codepoint word
+     * alone is NOT rejected by this rule (e.g. a lone "I") — only 2-or-more such words together,
+     * which is the actual pattern observed live ("ो ो", "े म").
+     */
+    private const val MIN_WORDS_FOR_SINGLE_CHAR_REJECT = 2
+
+    fun words(text: String): List<String> = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
 
     private fun maxRepeatStreak(words: List<String>): Int {
         var streak = 1
@@ -48,6 +57,39 @@ object UtteranceQuality {
     fun isGarbage(text: String): Boolean {
         val w = words(text)
         if (w.isEmpty()) return true
-        return maxRepeatStreak(w) >= REPEAT_STREAK_HARD_REJECT
+        if (maxRepeatStreak(w) >= REPEAT_STREAK_HARD_REJECT) return true
+
+        // Whisper hallucination on near-silent/very short audio characteristically emits one or
+        // more isolated single-codepoint "words" — bare combining marks (matras/diacritics,
+        // which by definition cannot stand alone as a word in any script since they attach to a
+        // base letter), sometimes mixed with a lone bare consonant. A genuinely short REAL word
+        // ("help", or "हाँ" — a consonant plus its vowel sign/anusvara, 3 codepoints) is always
+        // more than a single codepoint once you count its own marks, so neither rule below can
+        // fire on it. A single lone one-codepoint word (e.g. "I") is deliberately NOT rejected —
+        // only the multi-word all-single-codepoint pattern actually observed live is.
+        if (isDiacriticOnlyUtterance(w)) return true
+        if (w.size >= MIN_WORDS_FOR_SINGLE_CHAR_REJECT && w.all { it.codePointCount(0, it.length) == 1 }) {
+            return true
+        }
+
+        return false
+    }
+
+    /** True when EVERY word is made up entirely of combining marks — no base letter anywhere. */
+    private fun isDiacriticOnlyUtterance(words: List<String>): Boolean = words.all { isDiacriticOnlyWord(it) }
+
+    private fun isDiacriticOnlyWord(word: String): Boolean {
+        var sawMark = false
+        var i = 0
+        while (i < word.length) {
+            val cp = word.codePointAt(i)
+            i += Character.charCount(cp)
+            if (Character.isLetter(cp)) return false // has a real base letter -> not diacritic-only
+            when (Character.getType(cp).toByte()) {
+                Character.NON_SPACING_MARK, Character.COMBINING_SPACING_MARK, Character.ENCLOSING_MARK ->
+                    sawMark = true
+            }
+        }
+        return sawMark
     }
 }
